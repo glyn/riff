@@ -35,6 +35,8 @@ import (
 	"github.com/projectriff/riff/function-sidecar/pkg/dispatcher/http"
 	"github.com/projectriff/riff/message-transport/pkg/transport"
 	"github.com/projectriff/riff/message-transport/pkg/transport/kafka"
+	"github.com/projectriff/riff/message-transport/pkg/transport/metrics/kafka_over_kafka"
+	"github.com/satori/go.uuid"
 )
 
 type stringSlice []string
@@ -95,7 +97,10 @@ func main() {
 
 	consumerConfig := makeConsumerConfig()
 	consumerConfig.Consumer.Offsets.Initial = sarama.OffsetOldest
-	consumer, err := kafka.NewConsumer(brokers, group, []string{input}, consumerConfig)
+
+	pod := uuid.NewV4().String()
+
+	consumer, err := kafka_over_kafka.NewMetricsEmittingConsumer(brokers, group, pod, []string{input}, consumerConfig)
 	if err != nil {
 		panic(err)
 	}
