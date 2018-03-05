@@ -70,3 +70,17 @@ Then expose the `2345` port as a service, using `riff/config/delve/function-cont
 kubectl apply -f config/debug-service.yaml
 ----
 After restarting the `function-controller-...` pod, you can connect the debugger through `localhost:30102` (or `$(minikube ip):30102`).
+
+=== Generating Mocks
+
+Mocks can be regenerated as follows _and should then be checked in_:
+[source, bash]
+----
+make gen-mocks
+----
+
+You can verify that generated mocks which are committed or staged are up to date using:
+[source, bash]
+----
+make verify-mocks
+----

@@ -29,6 +29,7 @@ import (
 	"k8s.io/api/extensions/v1beta1"
 	informersV1Beta1 "k8s.io/client-go/informers/extensions/v1beta1"
 	"k8s.io/client-go/tools/cache"
+	"github.com/projectriff/riff/function-controller/pkg/controller/autoscaler"
 )
 
 // DefaultScalerInterval controls how often to run the scaling strategy.
@@ -54,13 +55,6 @@ type activityCounts map[fnKey]struct {
 	end     int64
 }
 
-// a scalingPolicy turns offsets into replicaCounts. activityCounts are computed as a byproduct
-type scalingPolicy func(offsets map[Subscription]PartitionedOffsets) (replicaCounts, activityCounts)
-
-// a scalingPostProcessor applies transformation on the computed number of replicas, possibly using activityCounts,
-// which is expected to be passed along without change
-type scalingPostProcessor func(replicaCounts, activityCounts) (replicaCounts, activityCounts)
-
 type ctrl struct {
 	topicsAddedOrUpdated      chan *v1.Topic
 	topicsDeleted             chan *v1.Topic
@@ -78,11 +72,11 @@ type ctrl struct {
 	topics         map[topicKey]*v1.Topic
 	actualReplicas map[fnKey]int32
 
+	autoscaler autoscaler.AutoScaler
+
 	deployer   Deployer
-	lagTracker LagTracker
 
 	scalerInterval time.Duration
-	scalingPolicy  scalingPolicy
 
 	httpServer *http.Server
 }
@@ -112,6 +106,9 @@ func (c *ctrl) Run(stopCh <-chan struct{}) {
 	go c.functionInformer.Informer().Run(informerStop)
 	go c.deploymentInformer.Informer().Run(informerStop)
 
+	// Run autoscaler
+	c.autoscaler.Run()
+
 	for {
 		select {
 		case topic := <-c.topicsAddedOrUpdated:
@@ -132,6 +129,7 @@ func (c *ctrl) Run(stopCh <-chan struct{}) {
 			c.scale()
 		case <-stopCh: // Maybe listen in another goroutine
 			close(informerStop)
+			c.autoscaler.Close()
 			if c.httpServer != nil {
 				timeout, ctx := context.WithTimeout(context.Background(), 1*time.Second)
 				defer ctx()
@@ -148,10 +146,6 @@ func (c *ctrl) SetScalingInterval(interval time.Duration) {
 	c.scalerInterval = interval
 }
 
-func (c *ctrl) SetScalingPolicy(policy scalingPolicy) {
-	c.scalingPolicy = policy
-}
-
 func (c *ctrl) onTopicAddedOrUpdated(topic *v1.Topic) {
 	log.Printf("Topic added: %v", topic.Name)
 	c.topics[tkey(topic)] = topic
@@ -165,11 +159,11 @@ func (c *ctrl) onTopicDeleted(topic *v1.Topic) {
 func (c *ctrl) onFunctionAdded(function *v1.Function) {
 	log.Printf("Function added: %v", function.Name)
 	c.functions[key(function)] = function
-	c.lagTracker.BeginTracking(Subscription{Topic: function.Spec.Input, Group: function.Name})
 	err := c.deployer.Deploy(function)
 	if err != nil {
 		log.Printf("Error %v", err)
 	}
+	c.autoscaler.StartMonitoring(function.Spec.Input, autoscaler.FunctionId{function.Name})
 }
 
 func (c *ctrl) onFunctionUpdated(oldFn *v1.Function, newFn *v1.Function) {
@@ -187,8 +181,9 @@ func (c *ctrl) onFunctionUpdated(oldFn *v1.Function, newFn *v1.Function) {
 	c.functions[fnKey] = newFn
 
 	if newFn.Spec.Input != oldFn.Spec.Input {
-		c.lagTracker.StopTracking(Subscription{Topic: oldFn.Spec.Input, Group: oldFn.Name})
-		c.lagTracker.BeginTracking(Subscription{Topic: newFn.Spec.Input, Group: newFn.Name})
+		c.autoscaler.StopMonitoring(oldFn.Spec.Input, autoscaler.FunctionId{oldFn.Name})
+
+		c.autoscaler.StartMonitoring(newFn.Spec.Input, autoscaler.FunctionId{newFn.Name})
 	}
 
 	err := c.deployer.Update(newFn, int(c.actualReplicas[fnKey]))
@@ -200,17 +195,18 @@ func (c *ctrl) onFunctionUpdated(oldFn *v1.Function, newFn *v1.Function) {
 func (c *ctrl) onFunctionDeleted(function *v1.Function) {
 	log.Printf("Function deleted: %v", function.Name)
 	delete(c.functions, key(function))
-	c.lagTracker.StopTracking(Subscription{Topic: function.Spec.Input, Group: function.Name})
 	err := c.deployer.Undeploy(function)
 	if err != nil {
 		log.Printf("Error %v", err)
 	}
+	c.autoscaler.StopMonitoring(function.Spec.Input, autoscaler.FunctionId{function.Name})
 }
 
 func (c *ctrl) onDeploymentAddedOrUpdated(deployment *v1beta1.Deployment) {
 	if key := functionKey(deployment); key != nil {
 		log.Printf("Deployment added/updated: %v", deployment.Name)
 		c.actualReplicas[*key] = deployment.Status.Replicas
+		c.autoscaler.InformFunctionReplicas(fnKeyToId(key), int(deployment.Status.Replicas))
 	}
 }
 
@@ -218,6 +214,7 @@ func (c *ctrl) onDeploymentDeleted(deployment *v1beta1.Deployment) {
 	if key := functionKey(deployment); key != nil {
 		log.Printf("Deployment deleted: %v", deployment.Name)
 		delete(c.actualReplicas, *key)
+		c.autoscaler.InformFunctionReplicas(fnKeyToId(key), 0)
 	}
 }
 
@@ -229,6 +226,11 @@ func functionKey(deployment *v1beta1.Deployment) *fnKey {
 	}
 }
 
+// TODO: unify fnKey and autoscaler.FunctionId so conversion is not necessary
+func fnKeyToId(key *fnKey) autoscaler.FunctionId {
+	return autoscaler.FunctionId{key.name}
+}
+
 func key(function *v1.Function) fnKey {
 	return fnKey{name: function.Name}
 }
@@ -238,30 +240,25 @@ func tkey(topic *v1.Topic) topicKey {
 }
 
 func (c *ctrl) scale() {
-	offsets := c.lagTracker.Compute()
-	replicas, _ := c.scalingPolicy(offsets)
+	replicas := c.autoscaler.Propose()
 
 	//log.Printf("Offsets = %v, =>Replicas = %v", offsets, replicas)
 
 	for k, fn := range c.functions {
-		desired := replicas[key(fn)]
+		fnKey := key(fn)
+		fnId := fnKeyToId(&fnKey)
+		desired := replicas[fnId]
 
 		//log.Printf("For %v, want %v currently have %v", fn.Name, desired, c.actualReplicas[k])
 
-		if desired != c.actualReplicas[k] {
-			err := c.deployer.Scale(fn, int(desired))
-			c.actualReplicas[k] = desired // This may also be updated by deployments informer later.
+		if int32(desired) != c.actualReplicas[k] {
+			err := c.deployer.Scale(fn, desired)
 			if err != nil {
 				log.Printf("Error %v", err)
 			}
+			c.actualReplicas[k] = int32(desired) // This may also be updated by deployments informer later.
+			c.autoscaler.InformFunctionReplicas(fnId, desired) // This may also be updated by deployments informer later.
 		}
-	}
-}
-
-// compose returns a function that applies 'post' after 'policy'
-func compose(post scalingPostProcessor, policy scalingPolicy) scalingPolicy {
-	return func(m map[Subscription]PartitionedOffsets) (replicaCounts, activityCounts) {
-		return post(policy(m))
 	}
 }
 
@@ -270,7 +267,7 @@ func New(topicInformer informersV1.TopicInformer,
 	functionInformer informersV1.FunctionInformer,
 	deploymentInformer informersV1Beta1.DeploymentInformer,
 	deployer Deployer,
-	tracker LagTracker,
+	auto autoscaler.AutoScaler,
 	port int) Controller {
 
 	pctrl := &ctrl{
@@ -288,11 +285,9 @@ func New(topicInformer informersV1.TopicInformer,
 		topics:                    make(map[topicKey]*v1.Topic),
 		actualReplicas:            make(map[fnKey]int32),
 		deployer:                  deployer,
-		lagTracker:                tracker,
+		autoscaler:                auto,
 		scalerInterval:            DefaultScalerInterval,
 	}
-	pctrl.scalingPolicy = pctrl.computeDesiredReplicas
-
 	topicInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			topic := obj.(*v1.Topic)
@@ -355,110 +350,4 @@ func New(topicInformer informersV1.TopicInformer,
 	}
 
 	return pctrl
-}
-
-func DecorateWithDelayAndSmoothing(c Controller) {
-	pctrl := c.(*ctrl)
-	smoother := smoother{ctrl: pctrl, memory: make(map[fnKey]float32)}
-	pctrl.scalingPolicy = compose(smoother.smooth, pctrl.scalingPolicy)
-
-	delayer := delayer{ctrl: pctrl, scaleDownToZeroDecision: make(map[fnKey]time.Time), previousCombinedPositions: make(activityCounts)}
-	pctrl.scalingPolicy = compose(delayer.delay, pctrl.scalingPolicy)
-}
-
-// computeDesiredReplicas turns a subscription based map (of offsets) into a function-key based map of how many replicas to spawn.
-// The logic is as follows: for a given topic, look at how many partitions have lag or activity (there is no point in spawning 2
-// replicas if only a single partition has lag, even if it's a 1000 messages lag).
-// If the function has multiple inputs, we take the max of those computations (some topics may be starved but that's ok
-// while we still maximize the throughput for the given topic that has the most needy partitions)
-func (c *ctrl) computeDesiredReplicas(offsets map[Subscription]PartitionedOffsets) (replicaCounts, activityCounts) {
-	replicas := make(replicaCounts)
-	combinedCurrentPositions := make(activityCounts)
-	for s, o := range offsets {
-		fn := fnKey{s.Group}
-		topic := topicKey{s.Topic}
-		replicas[fn] = max(replicas[fn], c.desiredReplicasForTopic(o, fn, topic))
-		ccp := combinedCurrentPositions[fn]
-		ccp.end += sumEndPositions(o)
-		ccp.current += sumCurrentPositions(o)
-		combinedCurrentPositions[fn] = ccp
-	}
-	return replicas, combinedCurrentPositions
-}
-
-func sumEndPositions(offsets PartitionedOffsets) int64 {
-	result := int64(0)
-	for _, o := range offsets {
-		result += o.End
-	}
-	return result
-}
-
-func sumCurrentPositions(offsets PartitionedOffsets) int64 {
-	result := int64(0)
-	for _, o := range offsets {
-		result += o.Current
-	}
-	return result
-}
-
-func (c *ctrl) desiredReplicasForTopic(offsets PartitionedOffsets, fnKey fnKey, tKey topicKey) int32 {
-	maxPartLag := int64(0)
-	for _, o := range offsets {
-		maxPartLag = max64(maxPartLag, o.Lag())
-	}
-
-	// TODO: those 3 numbers part of Function spec?
-	lagRequiredForMax := float32(10)
-	lagRequiredForOne := float32(1)
-	minReplicas := int32(0)
-
-	partitionCount := int32(1)
-	if topic, ok := c.topics[tKey]; ok {
-		partitionCount = *topic.Spec.Partitions
-	}
-	maxReplicas := partitionCount
-	if fn, ok := c.functions[fnKey]; ok {
-		if fn.Spec.MaxReplicas != nil {
-			maxReplicas = *fn.Spec.MaxReplicas
-		}
-	}
-	maxReplicas = clamp(maxReplicas, minReplicas, partitionCount)
-
-	slope := (float32(maxReplicas) - 1.0) / (lagRequiredForMax - lagRequiredForOne)
-	var computedReplicas int32
-	if slope > 0.0 {
-		// max>1
-		computedReplicas = (int32)(1 + (float32(maxPartLag)-lagRequiredForOne)*slope)
-	} else if maxPartLag >= int64(lagRequiredForOne) {
-		computedReplicas = 1
-	} else {
-		computedReplicas = 0
-	}
-	return clamp(computedReplicas, minReplicas, maxReplicas)
-}
-
-func clamp(value int32, min int32, max int32) int32 {
-	if value < min {
-		value = min
-	} else if value > max {
-		value = max
-	}
-	return value
-}
-
-func max(a int32, b int32) int32 {
-	if a > b {
-		return a
-	} else {
-		return b
-	}
-}
-
-func max64(a int64, b int64) int64 {
-	if a > b {
-		return a
-	} else {
-		return b
-	}
 }

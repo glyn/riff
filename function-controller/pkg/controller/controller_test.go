@@ -27,13 +27,15 @@ import (
 	"k8s.io/api/extensions/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/cache"
+	"github.com/projectriff/riff/function-controller/pkg/controller/autoscaler/mockautoscaler"
+	"github.com/projectriff/riff/function-controller/pkg/controller/autoscaler"
 )
 
 var _ = Describe("Controller", func() {
 	var (
 		ctrl                controller.Controller
-		tracker             *mocks.LagTracker
 		deployer            *mocks.Deployer
+		autoScaler          *mockautoscaler.AutoScaler
 		deploymentsHandlers cache.ResourceEventHandlerFuncs
 		functionHandlers    cache.ResourceEventHandlerFuncs
 		topicHandlers       cache.ResourceEventHandlerFuncs
@@ -41,8 +43,6 @@ var _ = Describe("Controller", func() {
 	)
 
 	BeforeEach(func() {
-		tracker = new(mocks.LagTracker)
-
 		deployer = new(mocks.Deployer)
 
 		topicInformer := new(mocks.TopicInformer)
@@ -70,30 +70,38 @@ var _ = Describe("Controller", func() {
 		})
 		siiDeployments.On("Run", mock.Anything)
 
-		ctrl = controller.New(topicInformer, functionInformer, deploymentInformer, deployer, tracker, -1)
+		autoScaler = new(mockautoscaler.AutoScaler)
+		autoScaler.On("Run")
+		autoScaler.On("Close").Return(nil)
+		autoScaler.On("StartMonitoring", mock.AnythingOfType("string"), mock.AnythingOfType("autoscaler.FunctionId")).Return(nil)
+		autoScaler.On("StopMonitoring", mock.AnythingOfType("string"), mock.AnythingOfType("autoscaler.FunctionId")).Return(nil)
+		autoScaler.On("InformFunctionReplicas", mock.AnythingOfType("autoscaler.FunctionId"), mock.AnythingOfType("int"))
+
+		ctrl = controller.New(topicInformer, functionInformer, deploymentInformer, deployer, autoScaler, -1)
 		closeCh = make(chan struct{}, 2) // 2 allows to easily send in a .Runt() func() on stubs w/o blocking
 	})
 
 	AfterEach(func() {
-		tracker.AssertExpectations(GinkgoT())
 		deployer.AssertExpectations(GinkgoT())
 	})
 
 	It("should shut down properly", func() {
-		tracker.On("Compute").Return(nil).Run(func(args mock.Arguments) {
+		proposal := make(map[autoscaler.FunctionId]int)
+		autoScaler.On("Propose").Run(func(args mock.Arguments) {
 			closeCh <- struct{}{}
-		})
+		}).Return(proposal)
 		ctrl.Run(closeCh)
 	})
 
 	It("should handle functions coming and going", func() {
 		ctrl.SetScalingInterval(10 * time.Millisecond)
 
-		tracker.On("BeginTracking", controller.Subscription{Topic: "input", Group: "fn"}).Return(nil)
-		tracker.On("StopTracking", controller.Subscription{Topic: "input", Group: "fn"}).Return(nil)
 		fn := &v1.Function{ObjectMeta: metav1.ObjectMeta{Name: "fn"}, Spec: v1.FunctionSpec{Input: "input"}}
 		deployer.On("Deploy", fn).Return(nil)
-		tracker.On("Compute").Return(lag(fn, 1))
+		proposal := make(map[autoscaler.FunctionId]int)
+		proposal[autoscaler.FunctionId{"fn"}] = 1
+		autoScaler.On("Propose").Return(proposal)
+
 		deployer.On("Scale", fn, 1).Return(nil).Run(func(args mock.Arguments) {
 			functionHandlers.DeleteFunc(fn)
 		})
@@ -109,11 +117,9 @@ var _ = Describe("Controller", func() {
 		fn1 := &v1.Function{ObjectMeta: metav1.ObjectMeta{Name: "fn"}, Spec: v1.FunctionSpec{Input: "input"}}
 		fn2 := &v1.Function{ObjectMeta: metav1.ObjectMeta{Name: "fn"}, Spec: v1.FunctionSpec{Input: "input2"}}
 
-		tracker.On("StopTracking", controller.Subscription{Topic: "input", Group: "fn"}).Return(nil)
 		deployer.On("Update", fn2, 0).Return(nil).Run(func(args mock.Arguments) {
 			closeCh <- struct{}{}
 		})
-		tracker.On("BeginTracking", controller.Subscription{Topic: "input2", Group: "fn"}).Return(nil)
 
 		functionHandlers.UpdateFunc(fn1, fn2)
 
@@ -123,7 +129,6 @@ var _ = Describe("Controller", func() {
 	It("should handle a non-trivial input topic", func() {
 		ctrl.SetScalingInterval(10 * time.Millisecond)
 
-		tracker.On("BeginTracking", controller.Subscription{Topic: "input", Group: "fn"}).Return(nil)
 		fn := &v1.Function{ObjectMeta: metav1.ObjectMeta{Name: "fn"}, Spec: v1.FunctionSpec{Input: "input"}}
 		deployer.On("Deploy", fn).Return(nil)
 
@@ -131,9 +136,18 @@ var _ = Describe("Controller", func() {
 		topic := &v1.Topic{ObjectMeta: metav1.ObjectMeta{Name: "input"}, Spec: v1.TopicSpec{Partitions: &three}}
 		deployer.On("Deploy", fn).Return(nil)
 
-		tracker.On("Compute").Return(lag(fn, 1, 0, 0)).Once()
-		tracker.On("Compute").Return(lag(fn, 6, 0, 1)).Once()
-		tracker.On("Compute").Return(lag(fn, 2, 3, 10)).Once()
+		proposal := make(map[autoscaler.FunctionId]int)
+		proposal[autoscaler.FunctionId{"fn"}] = 1
+		autoScaler.On("Propose").Return(proposal).Once()
+
+		proposal = make(map[autoscaler.FunctionId]int)
+		proposal[autoscaler.FunctionId{"fn"}] = 2
+		autoScaler.On("Propose").Return(proposal).Once()
+
+		proposal = make(map[autoscaler.FunctionId]int)
+		proposal[autoscaler.FunctionId{"fn"}] = 3
+		autoScaler.On("Propose").Return(proposal).Once()
+
 		deployer.On("Scale", fn, 1).Return(nil)
 		deployer.On("Scale", fn, 2).Return(nil)
 		deployer.On("Scale", fn, 3).Return(nil).Run(func(args mock.Arguments) {
@@ -150,7 +164,6 @@ var _ = Describe("Controller", func() {
 	It("should reconcile replicas on disruption", func() {
 		ctrl.SetScalingInterval(10 * time.Millisecond)
 
-		tracker.On("BeginTracking", controller.Subscription{Topic: "input", Group: "fn"}).Return(nil)
 		fn := &v1.Function{ObjectMeta: metav1.ObjectMeta{Name: "fn"}, Spec: v1.FunctionSpec{Input: "input"}}
 		deployer.On("Deploy", fn).Return(nil)
 
@@ -159,10 +172,13 @@ var _ = Describe("Controller", func() {
 		topic := &v1.Topic{ObjectMeta: metav1.ObjectMeta{Name: "input"}, Spec: v1.TopicSpec{Partitions: &three}}
 		deployer.On("Deploy", fn).Return(nil)
 
-		tracker.On("Compute").Return(lag(fn, 2, 6, 0)).Run(func(args mock.Arguments) {
+		proposal := make(map[autoscaler.FunctionId]int)
+		proposal[autoscaler.FunctionId{"fn"}] = 2
+		autoScaler.On("Propose").Return(proposal).Times(5).Run(func(args mock.Arguments) {
 			computes++
-		}).Times(5)
-		tracker.On("Compute").Return(lag(fn, 2, 6, 0)).Once().Run(func(args mock.Arguments) {
+		})
+
+		autoScaler.On("Propose").Return(proposal).Once().Run(func(args mock.Arguments) {
 			computes++
 			// Disrupt actual replicas on 6th computation
 			deployment := v1beta1.Deployment{
@@ -172,11 +188,12 @@ var _ = Describe("Controller", func() {
 				},
 				Status: v1beta1.DeploymentStatus{Replicas: int32(6)},
 			}
-			deploymentsHandlers.UpdateFunc(&deployment, &deployment)
-		})
-		tracker.On("Compute").Return(lag(fn, 2, 6, 0)).Run(func(args mock.Arguments) {
+			deploymentsHandlers.UpdateFunc(&deployment, &deployment)})
+
+		autoScaler.On("Propose").Return(proposal).Once().Run(func(args mock.Arguments) {
 			computes++
-		}).Once()
+		})
+
 		deployer.On("Scale", fn, 2).Return(nil).Once()
 		deployer.On("Scale", fn, 2).Return(nil).Run(func(args mock.Arguments) {
 			Expect(computes).To(Equal(7))
@@ -188,13 +205,3 @@ var _ = Describe("Controller", func() {
 		ctrl.Run(closeCh)
 	})
 })
-
-func lag(fn *v1.Function, lag ...int) map[controller.Subscription]controller.PartitionedOffsets {
-	result := make(map[controller.Subscription]controller.PartitionedOffsets)
-	offsets := make(controller.PartitionedOffsets, len(lag))
-	for i, l := range lag {
-		offsets[int32(i)] = controller.Offsets{End: int64(l)}
-	}
-	result[controller.Subscription{Group: fn.Name, Topic: fn.Spec.Input}] = offsets
-	return result
-}
