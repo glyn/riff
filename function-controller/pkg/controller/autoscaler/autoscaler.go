@@ -73,7 +73,7 @@ func getSamplingInterval(samplingInterval ... time.Duration) time.Duration {
 	var interval time.Duration
 	switch len(samplingInterval) {
 	case 0:
-		interval = time.Millisecond * 10
+		interval = time.Hour * 24 * 365 * 100 // turn off automatic sampling //time.Millisecond * 10
 	case 1:
 		interval = samplingInterval[0]
 	default:
@@ -106,6 +106,7 @@ type metricsTotals struct {
 }
 
 func (a *autoScaler) Propose() map[FunctionId]int {
+	a.TakeSample()
 	// Return a copy of the proposal map so the caller cannot corrupt the autoscaler.
 	proposal := make(map[FunctionId]int)
 	for funcId, replicas := range a.proposal {
@@ -210,7 +211,7 @@ func (a *autoScaler) samplingLoop() {
 	for {
 		select {
 		case <-time.After(a.samplingInterval):
-			a.takeSample()
+			a.TakeSample()
 
 		case <-a.stop:
 			close(a.samplingStopped)
@@ -219,7 +220,7 @@ func (a *autoScaler) samplingLoop() {
 	}
 }
 
-func (a *autoScaler) takeSample() {
+func (a *autoScaler) TakeSample() {
 	a.mutex.Lock()
 	defer a.mutex.Unlock()
 

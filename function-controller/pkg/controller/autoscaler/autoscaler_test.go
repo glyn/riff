@@ -32,7 +32,7 @@ var _ = Describe("Autoscaler", func() {
 		// internal interfaces necessary to avoid test races
 		receiveProducerMetric(pm metrics.ProducerAggregateMetric)
 		receiveConsumerMetric(cm metrics.ConsumerAggregateMetric)
-		takeSample()
+		//TakeSample()
 	}
 
 	const (
@@ -48,7 +48,6 @@ var _ = Describe("Autoscaler", func() {
 
 		proposal map[FunctionId]int
 
-		takeSample       func()
 		shouldPropose    func(id FunctionId, expectedProposedReplicas int)
 		shouldNotPropose func(id FunctionId)
 	)
@@ -60,10 +59,6 @@ var _ = Describe("Autoscaler", func() {
 		auto = NewAutoScaler(mockMetricsReceiver, testSamplingInterval)
 
 		testFuncId = FunctionId{"test-function"}
-
-		takeSample = func() {
-			auto.takeSample()
-		}
 
 		shouldPropose = func(funcId FunctionId, expectedProposedReplicas int) {
 			replicas, ok := proposal[funcId]
@@ -92,8 +87,6 @@ var _ = Describe("Autoscaler", func() {
 					Topic: testTopic,
 					Count: 1,
 				})
-
-				takeSample()
 			})
 
 			It("should scale up to one", func() {
@@ -102,7 +95,7 @@ var _ = Describe("Autoscaler", func() {
 
 			Context("when no further messages are produced", func() {
 				BeforeEach(func() {
-					takeSample()
+					auto.Propose()
 				})
 
 				It("should scale down to 0", func() {
@@ -125,8 +118,6 @@ var _ = Describe("Autoscaler", func() {
 					Function: testFuncId.Function,
 					Count:    1,
 				})
-
-				takeSample()
 			})
 
 			It("should scale up to 3 pods", func() {
@@ -135,7 +126,7 @@ var _ = Describe("Autoscaler", func() {
 
 			Context("when no further messages are produced", func() {
 				BeforeEach(func() {
-					takeSample()
+					auto.Propose()
 				})
 
 				It("should scale down to 0", func() {
@@ -145,6 +136,7 @@ var _ = Describe("Autoscaler", func() {
 
 			Context("when messages are then produced 10 times faster than they are consumed by 3 pods", func() {
 				BeforeEach(func() {
+					auto.Propose()
 					auto.InformFunctionReplicas(testFuncId, 3)
 
 					auto.receiveProducerMetric(metrics.ProducerAggregateMetric{
@@ -157,8 +149,6 @@ var _ = Describe("Autoscaler", func() {
 						Function: testFuncId.Function,
 						Count:    10,
 					})
-
-					takeSample()
 				})
 
 				It("should scale up to 30 pods", func() {
@@ -167,6 +157,7 @@ var _ = Describe("Autoscaler", func() {
 
 				Context("when messages are then produced 10 times slower than they are consumed by 30 pods", func() {
 					BeforeEach(func() {
+						auto.Propose()
 						auto.InformFunctionReplicas(testFuncId, 30)
 
 						auto.receiveProducerMetric(metrics.ProducerAggregateMetric{
@@ -179,8 +170,6 @@ var _ = Describe("Autoscaler", func() {
 							Function: testFuncId.Function,
 							Count:    100,
 						})
-
-						takeSample()
 					})
 
 					It("should scale down to 3 pods", func() {

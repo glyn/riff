@@ -76,3 +76,8 @@ func (_m *AutoScaler) StopMonitoring(topic string, function autoscaler.FunctionI
 
 	return r0
 }
+
+// TakeSample provides a mock function with given fields:
+func (_m *AutoScaler) TakeSample() {
+	_m.Called()
+}
