@@ -42,6 +42,8 @@ import (
 	"github.com/bsm/sarama-cluster"
 )
 
+const requiredScaleDownProposals = 300 // with 100 ms scaling rate, corresponds to 30 seconds FIXME: this is tied to the controller's DefaultScalerInterval
+
 func main() {
 
 	kubeconfig := flag.String("kubeconf", "", "Path to a kube config. Only required if out-of-cluster.")
@@ -63,7 +65,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	autoScaler := autoscaler.NewAutoScaler(metricsReceiver, time.Second*30)
+	autoScaler := autoscaler.NewAutoScaler(metricsReceiver, requiredScaleDownProposals, time.Second*30)
 	ctrl := controller.New(topicsInformer, functionsInformer, deploymentInformer, deployer, autoScaler, 8080)
 
 	stopCh := make(chan struct{})

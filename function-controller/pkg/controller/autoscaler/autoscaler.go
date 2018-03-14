@@ -53,15 +53,16 @@ type FunctionId struct {
 	Function string
 }
 
-// NewAutoScaler constructs an autoscaler instance using the given metrics receiver and the given sampling interval or
-// a default value if no interval is given.
-func NewAutoScaler(metricsReceiver metrics.MetricsReceiver, samplingInterval ... time.Duration) *autoScaler {
+// NewAutoScaler constructs an autoscaler instance using the given metrics receiver, the given required number of scale
+// down proposals, and the given sampling interval or a default value if no interval is given.
+func NewAutoScaler(metricsReceiver metrics.MetricsReceiver, requiredScaleDownProposals int, samplingInterval ... time.Duration) *autoScaler {
 	return &autoScaler{
 		mutex:               &sync.Mutex{},
 		metricsReceiver:     metricsReceiver,
 		samplingInterval:    getSamplingInterval(samplingInterval...),
 		totals:              make(map[string]map[FunctionId]*metricsTotals),
-		proposal:            make(map[FunctionId]int),
+		requiredScaleDownProposals: requiredScaleDownProposals,
+		proposals:           make(map[FunctionId]*Proposal),
 		replicas:            make(map[FunctionId]int),
 		stop:                make(chan struct{}),
 		accumulatingStopped: make(chan struct{}),
@@ -88,15 +89,16 @@ func (a *autoScaler) Run() {
 }
 
 type autoScaler struct {
-	mutex               *sync.Mutex
-	metricsReceiver     metrics.MetricsReceiver
-	samplingInterval    time.Duration
-	totals              map[string]map[FunctionId]*metricsTotals
-	proposal            map[FunctionId]int
-	replicas            map[FunctionId]int // tracks all functions, including those which are not being monitored
-	stop                chan struct{}
-	accumulatingStopped chan struct{}
-	samplingStopped     chan struct{}
+	mutex                      *sync.Mutex
+	metricsReceiver            metrics.MetricsReceiver
+	samplingInterval           time.Duration
+	totals                     map[string]map[FunctionId]*metricsTotals
+	requiredScaleDownProposals int
+	proposals                  map[FunctionId]*Proposal
+	replicas                   map[FunctionId]int // tracks all functions, including those which are not being monitored
+	stop                       chan struct{}
+	accumulatingStopped        chan struct{}
+	samplingStopped            chan struct{}
 }
 
 // metrics counts the number of messages transmitted to a Subscription's topic and received by the Subscription.
@@ -107,12 +109,12 @@ type metricsTotals struct {
 
 func (a *autoScaler) Propose() map[FunctionId]int {
 	a.TakeSample()
-	// Return a copy of the proposal map so the caller cannot corrupt the autoscaler.
-	proposal := make(map[FunctionId]int)
-	for funcId, replicas := range a.proposal {
-		proposal[funcId] = replicas
+
+	proposals := make(map[FunctionId]int)
+	for funcId, proposal := range a.proposals {
+		proposals[funcId] = proposal.Get()
 	}
-	return proposal
+	return proposals
 }
 
 func (a *autoScaler) StartMonitoring(topic string, function FunctionId) error {
@@ -131,7 +133,7 @@ func (a *autoScaler) StartMonitoring(topic string, function FunctionId) error {
 
 	funcTotals[function] = &metricsTotals{}
 
-	a.proposal[function] = 0
+	a.proposals[function] = NewProposal(a.requiredScaleDownProposals)
 
 	return nil
 }
@@ -155,7 +157,7 @@ func (a *autoScaler) StopMonitoring(topic string, function FunctionId) error {
 	if len(funcTotals) == 0 {
 		delete(a.totals, topic)
 	}
-	delete(a.proposal, function)
+	delete(a.proposals, function)
 
 	return nil
 }
@@ -207,6 +209,7 @@ func (a *autoScaler) receiveProducerMetric(pm metrics.ProducerAggregateMetric) {
 	}
 }
 
+// FIXME: delete this function if it is dead code
 func (a *autoScaler) samplingLoop() {
 	for {
 		select {
@@ -226,15 +229,17 @@ func (a *autoScaler) TakeSample() {
 
 	for _, funcTotals := range a.totals {
 		for fn, mt := range funcTotals {
+			var proposedReplicas int
 			if mt.receiveCount == 0 {
 				if mt.transmitCount == 0 {
-					a.proposal[fn] = 0
+					proposedReplicas = 0
 				} else {
-					a.proposal[fn] = 1 // arbitrary value
+					proposedReplicas = 1 // arbitrary value
 				}
 			} else {
-				a.proposal[fn] = int(math.Floor(float64(a.replicas[fn]) * float64(mt.transmitCount) / float64(mt.receiveCount)))
+				proposedReplicas = int(math.Floor(float64(a.replicas[fn]) * float64(mt.transmitCount) / float64(mt.receiveCount)))
 			}
+			a.proposals[fn].Propose(proposedReplicas)
 			// Zero the sampled metrics for the next interval
 			funcTotals[fn] = &metricsTotals{}
 		}

@@ -37,6 +37,7 @@ var _ = Describe("Autoscaler", func() {
 
 	const (
 		testTopic = "test-topic"
+		testRequiredScaleDownProposals = 10
 	)
 
 	var (
@@ -56,7 +57,7 @@ var _ = Describe("Autoscaler", func() {
 		testSamplingInterval = time.Millisecond * 10
 
 		mockMetricsReceiver = &mockmetrics.MetricsReceiver{}
-		auto = NewAutoScaler(mockMetricsReceiver, testSamplingInterval)
+		auto = NewAutoScaler(mockMetricsReceiver, testRequiredScaleDownProposals, testSamplingInterval)
 
 		testFuncId = FunctionId{"test-function"}
 
@@ -93,9 +94,11 @@ var _ = Describe("Autoscaler", func() {
 				shouldPropose(testFuncId, 1)
 			})
 
-			Context("when no further messages are produced", func() {
+			Context("when no further messages are produced for sufficiently long", func() {
 				BeforeEach(func() {
-					auto.Propose()
+					for i:= 0; i < testRequiredScaleDownProposals; i++ {
+						auto.Propose()
+					}
 				})
 
 				It("should scale down to 0", func() {
@@ -127,10 +130,23 @@ var _ = Describe("Autoscaler", func() {
 			Context("when no further messages are produced", func() {
 				BeforeEach(func() {
 					auto.Propose()
+					auto.InformFunctionReplicas(testFuncId, 3)
 				})
 
-				It("should scale down to 0", func() {
-					shouldPropose(testFuncId, 0)
+				It("should not scale down prematurely", func() {
+					shouldPropose(testFuncId, 3)
+				})
+
+				Context("when no further messages are produced for an extended period", func() {
+					BeforeEach(func() {
+						for i := 0; i < testRequiredScaleDownProposals; i++ {
+							auto.Propose()
+						}
+					})
+
+					It("should scale down to 0", func() {
+						shouldPropose(testFuncId, 0)
+					})
 				})
 			})
 
@@ -160,16 +176,19 @@ var _ = Describe("Autoscaler", func() {
 						auto.Propose()
 						auto.InformFunctionReplicas(testFuncId, 30)
 
-						auto.receiveProducerMetric(metrics.ProducerAggregateMetric{
-							Topic: testTopic,
-							Count: 10,
-						})
+						for i := 0; i < testRequiredScaleDownProposals; i++ {
+							auto.receiveProducerMetric(metrics.ProducerAggregateMetric{
+								Topic: testTopic,
+								Count: 10,
+							})
 
-						auto.receiveConsumerMetric(metrics.ConsumerAggregateMetric{
-							Topic:    testTopic,
-							Function: testFuncId.Function,
-							Count:    100,
-						})
+							auto.receiveConsumerMetric(metrics.ConsumerAggregateMetric{
+								Topic:    testTopic,
+								Function: testFuncId.Function,
+								Count:    100,
+							})
+							auto.Propose()
+						}
 					})
 
 					It("should scale down to 3 pods", func() {
@@ -286,11 +305,11 @@ var _ = Describe("Autoscaler", func() {
 
 	Describe("constructor function", func() {
 		It("should allow the sampling interval to default", func() {
-			NewAutoScaler(mockMetricsReceiver)
+			NewAutoScaler(mockMetricsReceiver, 1)
 		})
 
 		It("should panic if more than one sampling interval is specified", func() {
-			Expect(func() { NewAutoScaler(mockMetricsReceiver, time.Second, time.Second) }).To(Panic())
+			Expect(func() { NewAutoScaler(mockMetricsReceiver, 1, time.Second, time.Second) }).To(Panic())
 		})
 	})
 
@@ -309,7 +328,7 @@ var _ = Describe("Autoscaler", func() {
 			var cm <-chan metrics.ConsumerAggregateMetric = consumerMetrics
 			mockMetricsReceiver.On("ConsumerMetrics").Return(cm)
 
-			auto = NewAutoScaler(mockMetricsReceiver, time.Millisecond*10)
+			auto = NewAutoScaler(mockMetricsReceiver, 1, time.Millisecond*10)
 			auto.Run()
 
 			Expect(auto.StartMonitoring(testTopic, testFuncId)).To(Succeed())
