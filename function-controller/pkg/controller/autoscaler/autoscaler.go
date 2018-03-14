@@ -240,6 +240,7 @@ func (a *autoScaler) TakeSample() {
 				proposedReplicas = int(math.Floor(float64(a.replicas[fn]) * float64(mt.transmitCount) / float64(mt.receiveCount)))
 			}
 			a.proposals[fn].Propose(proposedReplicas)
+			// FIXME: support fn.Spec.MaxReplicas
 			// Zero the sampled metrics for the next interval
 			funcTotals[fn] = &metricsTotals{}
 		}

@@ -22,6 +22,8 @@ import (
 	"github.com/projectriff/riff/message-transport/pkg/transport/metrics"
 	"github.com/projectriff/riff/message-transport/pkg/transport/metrics/mockmetrics"
 	"time"
+	"fmt"
+	"github.com/onsi/gomega/types"
 )
 
 var _ = Describe("Autoscaler", func() {
@@ -48,9 +50,6 @@ var _ = Describe("Autoscaler", func() {
 		mockMetricsReceiver *mockmetrics.MetricsReceiver
 
 		proposal map[FunctionId]int
-
-		shouldPropose    func(id FunctionId, expectedProposedReplicas int)
-		shouldNotPropose func(id FunctionId)
 	)
 
 	BeforeEach(func() {
@@ -60,17 +59,6 @@ var _ = Describe("Autoscaler", func() {
 		auto = NewAutoScaler(mockMetricsReceiver, testRequiredScaleDownProposals, testSamplingInterval)
 
 		testFuncId = FunctionId{"test-function"}
-
-		shouldPropose = func(funcId FunctionId, expectedProposedReplicas int) {
-			replicas, ok := proposal[funcId]
-			Expect(ok).To(BeTrue())
-			Expect(replicas).To(Equal(expectedProposedReplicas)) // FIXME: use gomega to put the failure in the caller
-		}
-
-		shouldNotPropose = func(funcId FunctionId) {
-			_, ok := proposal[funcId]
-			Expect(ok).To(BeFalse())
-		}
 	})
 
 	JustBeforeEach(func() {
@@ -91,7 +79,7 @@ var _ = Describe("Autoscaler", func() {
 			})
 
 			It("should scale up to one", func() {
-				shouldPropose(testFuncId, 1)
+				Expect(proposal).To(Propose(testFuncId, 1))
 			})
 
 			Context("when no further messages are produced for sufficiently long", func() {
@@ -102,7 +90,7 @@ var _ = Describe("Autoscaler", func() {
 				})
 
 				It("should scale down to 0", func() {
-					shouldPropose(testFuncId, 0)
+					Expect(proposal).To(Propose(testFuncId, 0))
 				})
 			})
 		})
@@ -124,7 +112,7 @@ var _ = Describe("Autoscaler", func() {
 			})
 
 			It("should scale up to 3 pods", func() {
-				shouldPropose(testFuncId, 3)
+				Expect(proposal).To(Propose(testFuncId, 3))
 			})
 
 			Context("when no further messages are produced", func() {
@@ -134,7 +122,7 @@ var _ = Describe("Autoscaler", func() {
 				})
 
 				It("should not scale down prematurely", func() {
-					shouldPropose(testFuncId, 3)
+					Expect(proposal).To(Propose(testFuncId, 3))
 				})
 
 				Context("when no further messages are produced for an extended period", func() {
@@ -145,7 +133,7 @@ var _ = Describe("Autoscaler", func() {
 					})
 
 					It("should scale down to 0", func() {
-						shouldPropose(testFuncId, 0)
+						Expect(proposal).To(Propose(testFuncId, 0))
 					})
 				})
 			})
@@ -168,7 +156,7 @@ var _ = Describe("Autoscaler", func() {
 				})
 
 				It("should scale up to 30 pods", func() {
-					shouldPropose(testFuncId, 30)
+					Expect(proposal).To(Propose(testFuncId, 30))
 				})
 
 				Context("when messages are then produced 10 times slower than they are consumed by 30 pods", func() {
@@ -192,7 +180,7 @@ var _ = Describe("Autoscaler", func() {
 					})
 
 					It("should scale down to 3 pods", func() {
-						shouldPropose(testFuncId, 3)
+						Expect(proposal).To(Propose(testFuncId, 3))
 					})
 				})
 			})
@@ -210,7 +198,7 @@ var _ = Describe("Autoscaler", func() {
 			})
 
 			It("should propose zero replicas by default", func() {
-				shouldPropose(testFuncId, 0)
+				Expect(proposal).To(Propose(testFuncId, 0))
 			})
 
 			It("should return a copy of the proposal map", func() {
@@ -234,7 +222,7 @@ var _ = Describe("Autoscaler", func() {
 				})
 
 				It("should propose zero replicas by default", func() {
-					shouldPropose(testFuncId, 0)
+					Expect(proposal).To(Propose(testFuncId, 0))
 				})
 			})
 
@@ -248,14 +236,14 @@ var _ = Describe("Autoscaler", func() {
 				})
 
 				It("should not propose replicas for the function by default", func() {
-					shouldNotPropose(testFuncId)
+					Expect(proposal).NotTo(ProposeFunction(testFuncId))
 				})
 			})
 		})
 
 		Context("when not monitoring a given function", func() {
 			It("should not propose replicas for the function by default", func() {
-				shouldNotPropose(testFuncId)
+				Expect(proposal).NotTo(ProposeFunction(testFuncId))
 			})
 
 			It("should return an error when monitoring the function is stopped", func() {
@@ -268,7 +256,7 @@ var _ = Describe("Autoscaler", func() {
 				})
 
 				It("should not propose any replicas for the function", func() {
-					shouldNotPropose(testFuncId)
+					Expect(proposal).NotTo(ProposeFunction(testFuncId))
 				})
 			})
 		})
@@ -287,13 +275,13 @@ var _ = Describe("Autoscaler", func() {
 				})
 
 				It("should propose zero replicas by default", func() {
-					shouldPropose(anotherFuncId, 0)
+					Expect(proposal).To(Propose(anotherFuncId, 0))
 				})
 			})
 
 			Context("when not monitoring another function", func() {
 				It("should not propose replicas for the function by default", func() {
-					shouldNotPropose(anotherFuncId)
+					Expect(proposal).NotTo(ProposeFunction(anotherFuncId))
 				})
 			})
 
@@ -352,8 +340,90 @@ var _ = Describe("Autoscaler", func() {
 			})
 
 			It("should scale down to 0", func() {
-				shouldPropose(testFuncId, 0)
+				Expect(proposal).To(Propose(testFuncId, 0))
 			})
 		})
 	})
 })
+
+func Propose(funcId FunctionId, replicas int) types.GomegaMatcher {
+	return &proposeFunctionReplicasMatcher{
+		funcId: funcId,
+		replicas: replicas,
+	}
+}
+
+type proposeFunctionReplicasMatcher struct {
+	funcId FunctionId
+	replicas int
+}
+
+func (matcher *proposeFunctionReplicasMatcher) Match(actual interface{}) (success bool, err error) {
+	proposal, ok := actual.(map[FunctionId]int)
+	if !ok {
+		return false, fmt.Errorf("Propose matcher expects a map[FunctionId]int")
+	}
+
+	replicas, ok := proposal[matcher.funcId]
+	if !ok {
+		return false, nil
+	}
+
+	return replicas == matcher.replicas, nil
+}
+
+func (matcher *proposeFunctionReplicasMatcher) FailureMessage(actual interface{}) (message string) {
+	proposal, ok := actual.(map[FunctionId]int)
+	if !ok {
+		return fmt.Sprintf("Expected proposal\n\t%#v\nto be of type map[FunctionId]int", actual)
+	}
+
+	replicas, ok := proposal[matcher.funcId]
+	if !ok {
+		return fmt.Sprintf("Expected proposal\n\t%#v\nto contain a number of replicas for function %#v", actual, matcher.funcId)
+	}
+
+	return fmt.Sprintf("Expected proposal for function %#v of\n\t%d replicas\nto be\n\t%d replicas", matcher.funcId, replicas, matcher.replicas)
+}
+
+func (matcher *proposeFunctionReplicasMatcher) NegatedFailureMessage(actual interface{}) (message string) {
+	proposal, ok := actual.(map[FunctionId]int)
+	if !ok {
+		return fmt.Sprintf("Expected proposal\n\t%#v\nto be of type map[FunctionId]int", actual)
+	}
+
+	replicas, ok := proposal[matcher.funcId]
+	if !ok {
+		return fmt.Sprintf("Expected proposal\n\t%#v\nnot to contain the correct number of replicas for function %#v", actual, matcher.funcId)
+	}
+
+	return fmt.Sprintf("Expected proposal for function %#v of\n\t%d replicas\nnot to be\n\t%d replicas", matcher.funcId, replicas, matcher.replicas)
+}
+
+func ProposeFunction(funcId FunctionId) types.GomegaMatcher {
+	return &proposeFunctionMatcher{
+		funcId: funcId,
+	}
+}
+
+type proposeFunctionMatcher struct {
+	funcId FunctionId
+}
+
+func (matcher *proposeFunctionMatcher) Match(actual interface{}) (success bool, err error) {
+	proposal, ok := actual.(map[FunctionId]int)
+	if !ok {
+		return true, fmt.Errorf("ProposeFunction matcher expects a map[FunctionId]int")
+	}
+
+	_, ok = proposal[matcher.funcId]
+	return ok, nil
+}
+
+func (matcher *proposeFunctionMatcher) FailureMessage(actual interface{}) (message string) {
+	return fmt.Sprintf("Expected proposal\n\t%#v\nto contain a number of replicas for function %#v", actual, matcher.funcId)
+}
+
+func (matcher *proposeFunctionMatcher) NegatedFailureMessage(actual interface{}) (message string) {
+	return fmt.Sprintf("Expected proposal\n\t%#v\nnot to contain a number of replicas for function %#v", actual, matcher.funcId)
+}
