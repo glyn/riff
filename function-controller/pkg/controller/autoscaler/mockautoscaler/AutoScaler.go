@@ -49,6 +49,11 @@ func (_m *AutoScaler) Run() {
 	_m.Called()
 }
 
+// SetMaxReplicasPolicy provides a mock function with given fields: _a0
+func (_m *AutoScaler) SetMaxReplicasPolicy(_a0 func(string, string) int) {
+	_m.Called(_a0)
+}
+
 // StartMonitoring provides a mock function with given fields: topic, function
 func (_m *AutoScaler) StartMonitoring(topic string, function autoscaler.FunctionId) error {
 	ret := _m.Called(topic, function)
@@ -75,9 +80,4 @@ func (_m *AutoScaler) StopMonitoring(topic string, function autoscaler.FunctionI
 	}
 
 	return r0
-}
-
-// TakeSample provides a mock function with given fields:
-func (_m *AutoScaler) TakeSample() {
-	_m.Called()
 }

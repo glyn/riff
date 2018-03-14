@@ -1,7 +1,13 @@
 == Function Controller
-The *function controller* runs inside kubernetes, watching for changes to *function* and *topic* resources. It reacts by requesting the deployment of functions, and scales them according to events being detected on their input topics.
+The *function controller* runs inside kubernetes, watching for changes to *function* and *topic* resources.
+It reacts by requesting the deployment of functions, and scales them according to activity on
+their input topics.
 
-The following function config will limit the number of instance to 3 even if the number of topic partitions exceeds 3, and keep the last instance running for at least 60s.
+Scaling is capped to the minimum of `maxReplicas` in the function configuration (if set) and the number of
+partitions in the function's (Kafka) input topic.
+
+For example, the following function configuration limits the number of replicas to 3 even if the number of
+topic partitions exceeds 3, and keeps the last replica running for at least 60 seconds.
 
 ```yaml
 spec:

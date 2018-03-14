@@ -38,7 +38,7 @@ var _ = Describe("Autoscaler", func() {
 	}
 
 	const (
-		testTopic = "test-topic"
+		testTopic                      = "test-topic"
 		testRequiredScaleDownProposals = 10
 	)
 
@@ -84,7 +84,7 @@ var _ = Describe("Autoscaler", func() {
 
 			Context("when no further messages are produced for sufficiently long", func() {
 				BeforeEach(func() {
-					for i:= 0; i < testRequiredScaleDownProposals; i++ {
+					for i := 0; i < testRequiredScaleDownProposals; i++ {
 						auto.Propose()
 					}
 				})
@@ -185,6 +185,31 @@ var _ = Describe("Autoscaler", func() {
 				})
 			})
 		})
+
+		Context("when the maximum replicas policy returns 2 but messages are produced 3 times faster than they are consumed by 1 pod", func() {
+			BeforeEach(func() {
+				auto.SetMaxReplicasPolicy(func(topic string, function string) int {
+					return 2;
+				})
+				auto.InformFunctionReplicas(testFuncId, 1)
+
+				auto.receiveProducerMetric(metrics.ProducerAggregateMetric{
+					Topic: testTopic,
+					Count: 3,
+				})
+
+				auto.receiveConsumerMetric(metrics.ConsumerAggregateMetric{
+					Topic:    testTopic,
+					Function: testFuncId.Function,
+					Count:    1,
+				})
+			})
+
+			It("should scale up to 2 pods (rather than 3)", func() {
+				Expect(proposal).To(Propose(testFuncId, 2))
+			})
+		})
+
 	})
 
 	Describe("monitoring lifecycle", func() {
@@ -348,13 +373,13 @@ var _ = Describe("Autoscaler", func() {
 
 func Propose(funcId FunctionId, replicas int) types.GomegaMatcher {
 	return &proposeFunctionReplicasMatcher{
-		funcId: funcId,
+		funcId:   funcId,
 		replicas: replicas,
 	}
 }
 
 type proposeFunctionReplicasMatcher struct {
-	funcId FunctionId
+	funcId   FunctionId
 	replicas int
 }
 

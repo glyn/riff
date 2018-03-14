@@ -349,5 +349,28 @@ func New(topicInformer informersV1.TopicInformer,
 		}()
 	}
 
+	auto.SetMaxReplicasPolicy(func(topic string, function string) int{
+		partitionCount := 1
+		if topic, ok := pctrl.topics[topicKey{topic}]; ok {
+			partitionCount = int(*topic.Spec.Partitions)
+		}
+		maxReplicas := partitionCount
+		if fn, ok := pctrl.functions[fnKey{function}]; ok {
+			if fn.Spec.MaxReplicas != nil {
+				maxReplicas = int(*fn.Spec.MaxReplicas)
+			}
+		}
+		return clamp(maxReplicas, 0, partitionCount)
+	})
+
 	return pctrl
+}
+
+func clamp(value int, min int, max int) int {
+	if value < min {
+		value = min
+	} else if value > max {
+		value = max
+	}
+	return value
 }

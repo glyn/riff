@@ -40,6 +40,7 @@ var _ = Describe("Controller", func() {
 		functionHandlers    cache.ResourceEventHandlerFuncs
 		topicHandlers       cache.ResourceEventHandlerFuncs
 		closeCh             chan struct{}
+		maxReplicasPolicy   func(string, string) int
 	)
 
 	BeforeEach(func() {
@@ -71,6 +72,9 @@ var _ = Describe("Controller", func() {
 		siiDeployments.On("Run", mock.Anything)
 
 		autoScaler = new(mockautoscaler.AutoScaler)
+		autoScaler.On("SetMaxReplicasPolicy", mock.AnythingOfType("func(string, string) int")).Run(func(args mock.Arguments) {
+			maxReplicasPolicy = args.Get(0).(func(string, string) int)
+		})
 		autoScaler.On("Run")
 		autoScaler.On("Close").Return(nil)
 		autoScaler.On("StartMonitoring", mock.AnythingOfType("string"), mock.AnythingOfType("autoscaler.FunctionId")).Return(nil)
@@ -188,7 +192,8 @@ var _ = Describe("Controller", func() {
 				},
 				Status: v1beta1.DeploymentStatus{Replicas: int32(6)},
 			}
-			deploymentsHandlers.UpdateFunc(&deployment, &deployment)})
+			deploymentsHandlers.UpdateFunc(&deployment, &deployment)
+		})
 
 		autoScaler.On("Propose").Return(proposal).Once().Run(func(args mock.Arguments) {
 			computes++
@@ -203,5 +208,51 @@ var _ = Describe("Controller", func() {
 		topicHandlers.AddFunc(topic)
 
 		ctrl.Run(closeCh)
+	})
+
+	Describe("maxReplicasScalingPolicy", func() {
+		Context("when the input topic has 10 partitions", func() {
+			BeforeEach(func() {
+				ten := int32(10)
+				topic := &v1.Topic{ObjectMeta: metav1.ObjectMeta{Name: "input"}, Spec: v1.TopicSpec{Partitions: &ten}}
+				topicHandlers.AddFunc(topic)
+
+				proposal := make(map[autoscaler.FunctionId]int)
+				proposal[autoscaler.FunctionId{"fn"}] = 0
+				autoScaler.On("Propose").Return(proposal)
+
+				go ctrl.Run(closeCh)
+			})
+
+			Context("when the function does not specify maxReplicas", func() {
+			    BeforeEach(func() {
+					fn := &v1.Function{ObjectMeta: metav1.ObjectMeta{Name: "fn"}, Spec: v1.FunctionSpec{Input: "input"}}
+					deployer.On("Deploy", fn).Return(nil)
+					functionHandlers.AddFunc(fn)
+				})
+
+				It("should eventually return 10", func() {
+					// The controller takes a little while to set up the topic and function.
+					Eventually(func() int { return maxReplicasPolicy("input", "fn"); }).Should(Equal(10))
+					closeCh <- struct{}{}
+				})
+			})
+
+
+			Context("when the function specifies maxReplicas as 5", func() {
+				BeforeEach(func() {
+					five := int32(5)
+					fn := &v1.Function{ObjectMeta: metav1.ObjectMeta{Name: "fn"}, Spec: v1.FunctionSpec{Input: "input", MaxReplicas: &five}}
+					deployer.On("Deploy", fn).Return(nil)
+					functionHandlers.AddFunc(fn)
+				})
+
+				It("should eventually return 5", func() {
+					// The controller takes a little while to update the function.
+					Eventually(func() int { return maxReplicasPolicy("input", "fn"); }).Should(Equal(5))
+					closeCh <- struct{}{}
+				})
+			})
+		})
 	})
 })
