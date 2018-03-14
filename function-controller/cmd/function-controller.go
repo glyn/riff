@@ -42,7 +42,7 @@ import (
 	"github.com/bsm/sarama-cluster"
 )
 
-const requiredScaleDownProposals = 300 // with 100 ms scaling rate, corresponds to 30 seconds FIXME: this is tied to the controller's DefaultScalerInterval
+const requiredScaleDownProposals = 100 // with 100 ms scaling rate, corresponds to 10 seconds FIXME: this is tied to the controller's DefaultScalerInterval
 
 func main() {
 
