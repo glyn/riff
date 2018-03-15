@@ -34,7 +34,6 @@ import (
 	"github.com/projectriff/riff/function-sidecar/pkg/dispatcher/grpc"
 	"github.com/projectriff/riff/function-sidecar/pkg/dispatcher/http"
 	"github.com/projectriff/riff/message-transport/pkg/transport"
-	"github.com/projectriff/riff/message-transport/pkg/transport/kafka"
 	"github.com/projectriff/riff/message-transport/pkg/transport/metrics/kafka_over_kafka"
 	"github.com/satori/go.uuid"
 )
@@ -85,7 +84,7 @@ func main() {
 	var producer transport.Producer
 	var err error
 	if output != "" {
-		producer, err = kafka.NewProducer(brokers)
+		producer, err = kafka_over_kafka.NewMetricsEmittingProducer(brokers, uuid.NewV4().String())
 		if err != nil {
 			panic(err)
 		}
