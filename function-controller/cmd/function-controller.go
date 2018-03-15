@@ -37,12 +37,10 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"github.com/projectriff/riff/function-controller/pkg/controller/autoscaler"
-	"time"
 	"github.com/projectriff/riff/message-transport/pkg/transport/metrics/kafka_over_kafka"
 	"github.com/bsm/sarama-cluster"
+	"github.com/projectriff/riff/message-transport/pkg/transport/kafka"
 )
-
-const requiredScaleDownProposals = 100 // with 100 ms scaling rate, corresponds to 10 seconds FIXME: this is tied to the controller's DefaultScalerInterval. Need to support fn.Spec.IdleTimeoutMs
 
 func main() {
 
@@ -65,7 +63,13 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	autoScaler := autoscaler.NewAutoScaler(metricsReceiver, requiredScaleDownProposals, time.Second*30)
+
+	transportInspector, err := kafka.NewInspector(brokers)
+	if err != nil {
+		panic(err)
+	}
+
+	autoScaler := autoscaler.NewAutoScaler(metricsReceiver, transportInspector)
 	ctrl := controller.New(topicsInformer, functionsInformer, deploymentInformer, deployer, autoScaler, 8080)
 
 	stopCh := make(chan struct{})

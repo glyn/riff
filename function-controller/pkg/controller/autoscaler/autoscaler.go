@@ -22,7 +22,9 @@ import (
 	"sync"
 	"time"
 	"math"
+	"log"
 	"io"
+	"github.com/projectriff/riff/message-transport/pkg/transport"
 )
 
 //go:generate mockery -name=AutoScaler -output mockautoscaler -outpkg mockautoscaler
@@ -63,13 +65,12 @@ type FunctionId struct {
 const MaxUint = ^uint(0)
 const MaxInt = int(MaxUint >> 1)
 
-// NewAutoScaler constructs an autoscaler instance using the given metrics receiver, the given required number of scale
-// down proposals, and the given sampling interval or a default value if no interval is given.
-func NewAutoScaler(metricsReceiver metrics.MetricsReceiver, samplingInterval ... time.Duration) *autoScaler {
+// NewAutoScaler constructs an autoscaler instance using the given metrics receiver and the given transport inspector.
+func NewAutoScaler(metricsReceiver metrics.MetricsReceiver, transportInspector transport.Inspector) *autoScaler {
 	return &autoScaler{
 		mutex:               &sync.Mutex{},
 		metricsReceiver:     metricsReceiver,
-		samplingInterval:    getSamplingInterval(samplingInterval...),
+		transportInspector:  transportInspector,
 		totals:              make(map[string]map[FunctionId]*metricsTotals),
 		proposals:           make(map[FunctionId]*Proposal),
 		replicas:            make(map[FunctionId]int),
@@ -77,21 +78,7 @@ func NewAutoScaler(metricsReceiver metrics.MetricsReceiver, samplingInterval ...
 		delayScaleDown:      func(function string) time.Duration { return time.Duration(0) },
 		stop:                make(chan struct{}),
 		accumulatingStopped: make(chan struct{}),
-		samplingStopped:     make(chan struct{}),
 	}
-}
-
-func getSamplingInterval(samplingInterval ... time.Duration) time.Duration {
-	var interval time.Duration
-	switch len(samplingInterval) {
-	case 0:
-		interval = time.Hour * 24 * 365 * 100 // turn off automatic sampling //time.Millisecond * 10
-	case 1:
-		interval = samplingInterval[0]
-	default:
-		panic("At most one sampling interval may be specified")
-	}
-	return interval
 }
 
 func (a *autoScaler) SetMaxReplicasPolicy(maxReplicas func(topic string, function string) int) {
@@ -104,13 +91,12 @@ func (a *autoScaler) SetDelayScaleDownPolicy(delayScaleDown func(function string
 
 func (a *autoScaler) Run() {
 	go a.receiveLoop()
-	go a.samplingLoop()
 }
 
 type autoScaler struct {
 	mutex                      *sync.Mutex
 	metricsReceiver            metrics.MetricsReceiver
-	samplingInterval           time.Duration
+	transportInspector         transport.Inspector
 	totals                     map[string]map[FunctionId]*metricsTotals
 	requiredScaleDownProposals int
 	proposals                  map[FunctionId]*Proposal
@@ -119,7 +105,6 @@ type autoScaler struct {
 	delayScaleDown             func(function string) time.Duration
 	stop                       chan struct{}
 	accumulatingStopped        chan struct{}
-	samplingStopped            chan struct{}
 }
 
 // metrics counts the number of messages transmitted to a Subscription's topic and received by the Subscription.
@@ -129,13 +114,40 @@ type metricsTotals struct {
 }
 
 func (a *autoScaler) Propose() map[FunctionId]int {
-	a.TakeSample()
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
+
+	a.calculateProposal()
 
 	proposals := make(map[FunctionId]int)
 	for funcId, proposal := range a.proposals {
-		proposals[funcId] = proposal.Get()
+		replicas := proposal.Get()
+		// If zero replicas are proposed, check the queue of work to the function.
+		if replicas == 0 {
+			if !a.emptyQueue(funcId) {
+				// There may be work to do, so propose 1 replica instead.
+				replicas = 1
+			}
+		}
+		proposals[funcId] = replicas
 	}
 	return proposals
+}
+
+func (a *autoScaler) emptyQueue(funcId FunctionId) bool {
+	for topic, funcTotals := range a.totals {
+		if _, ok := funcTotals[funcId]; ok {
+			queueLen, err := a.transportInspector.QueueLength(topic, funcId.Function)
+			if err != nil {
+				log.Printf("Failed to obtain queue length (and will assume it is positive): %v", err)
+				return false
+			}
+			if queueLen > 0 {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (a *autoScaler) StartMonitoring(topic string, function FunctionId) error {
@@ -232,24 +244,7 @@ func (a *autoScaler) receiveProducerMetric(pm metrics.ProducerAggregateMetric) {
 	}
 }
 
-// FIXME: delete this function if it is dead code
-func (a *autoScaler) samplingLoop() {
-	for {
-		select {
-		case <-time.After(a.samplingInterval):
-			a.TakeSample()
-
-		case <-a.stop:
-			close(a.samplingStopped)
-			return
-		}
-	}
-}
-
-func (a *autoScaler) TakeSample() {
-	a.mutex.Lock()
-	defer a.mutex.Unlock()
-
+func (a *autoScaler) calculateProposal() {
 	for topic, funcTotals := range a.totals {
 		for fn, mt := range funcTotals {
 			var proposedReplicas int
