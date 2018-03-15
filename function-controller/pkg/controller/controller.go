@@ -35,6 +35,8 @@ import (
 // DefaultScalerInterval controls how often to run the scaling strategy.
 const DefaultScalerInterval = 100 * time.Millisecond
 
+const defaultScaleDownDelay = time.Second * 10
+
 // Controller deploys functions by monitoring input lag to registered functions. To do so, it periodically runs
 // some scaling logic and keeps track of (un-)registered functions, topics and deployments.
 type Controller interface {
@@ -74,7 +76,7 @@ type ctrl struct {
 
 	autoscaler autoscaler.AutoScaler
 
-	deployer   Deployer
+	deployer Deployer
 
 	scalerInterval time.Duration
 
@@ -256,7 +258,7 @@ func (c *ctrl) scale() {
 			if err != nil {
 				log.Printf("Error %v", err)
 			}
-			c.actualReplicas[k] = int32(desired) // This may also be updated by deployments informer later.
+			c.actualReplicas[k] = int32(desired)               // This may also be updated by deployments informer later.
 			c.autoscaler.InformFunctionReplicas(fnId, desired) // This may also be updated by deployments informer later.
 		}
 	}
@@ -349,7 +351,7 @@ func New(topicInformer informersV1.TopicInformer,
 		}()
 	}
 
-	auto.SetMaxReplicasPolicy(func(topic string, function string) int{
+	auto.SetMaxReplicasPolicy(func(topic string, function string) int {
 		partitionCount := 1
 		if topic, ok := pctrl.topics[topicKey{topic}]; ok {
 			partitionCount = int(*topic.Spec.Partitions)
@@ -361,6 +363,15 @@ func New(topicInformer informersV1.TopicInformer,
 			}
 		}
 		return clamp(maxReplicas, 0, partitionCount)
+	})
+
+	auto.SetDelayScaleDownPolicy(func(function string) time.Duration {
+		if fn, ok := pctrl.functions[fnKey{function}]; ok {
+			if fn.Spec.IdleTimeoutMs != nil {
+				return time.Millisecond * time.Duration(*fn.Spec.IdleTimeoutMs)
+			}
+		}
+		return defaultScaleDownDelay
 	})
 
 	return pctrl

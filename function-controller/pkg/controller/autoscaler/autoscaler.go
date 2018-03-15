@@ -28,8 +28,11 @@ import (
 //go:generate mockery -name=AutoScaler -output mockautoscaler -outpkg mockautoscaler
 
 type AutoScaler interface {
-	// Set maximum replica count policy
+	// Set maximum replica count policy.
 	SetMaxReplicasPolicy(func(topic string, function string) int)
+
+	// Set delay scale down policy.
+	SetDelayScaleDownPolicy(func(function string) time.Duration)
 
 	// Run starts the autoscaler receiving and sampling metrics.
 	Run()
@@ -62,19 +65,19 @@ const MaxInt = int(MaxUint >> 1)
 
 // NewAutoScaler constructs an autoscaler instance using the given metrics receiver, the given required number of scale
 // down proposals, and the given sampling interval or a default value if no interval is given.
-func NewAutoScaler(metricsReceiver metrics.MetricsReceiver, requiredScaleDownProposals int, samplingInterval ... time.Duration) *autoScaler {
+func NewAutoScaler(metricsReceiver metrics.MetricsReceiver, samplingInterval ... time.Duration) *autoScaler {
 	return &autoScaler{
-		mutex:                      &sync.Mutex{},
-		metricsReceiver:            metricsReceiver,
-		samplingInterval:           getSamplingInterval(samplingInterval...),
-		totals:                     make(map[string]map[FunctionId]*metricsTotals),
-		requiredScaleDownProposals: requiredScaleDownProposals,
-		proposals:                  make(map[FunctionId]*Proposal),
-		replicas:                   make(map[FunctionId]int),
-		maxReplicas:                func(topic string, function string) int{return MaxInt},
-		stop:                       make(chan struct{}),
-		accumulatingStopped:        make(chan struct{}),
-		samplingStopped:            make(chan struct{}),
+		mutex:               &sync.Mutex{},
+		metricsReceiver:     metricsReceiver,
+		samplingInterval:    getSamplingInterval(samplingInterval...),
+		totals:              make(map[string]map[FunctionId]*metricsTotals),
+		proposals:           make(map[FunctionId]*Proposal),
+		replicas:            make(map[FunctionId]int),
+		maxReplicas:         func(topic string, function string) int { return MaxInt },
+		delayScaleDown:      func(function string) time.Duration { return time.Duration(0) },
+		stop:                make(chan struct{}),
+		accumulatingStopped: make(chan struct{}),
+		samplingStopped:     make(chan struct{}),
 	}
 }
 
@@ -95,6 +98,10 @@ func (a *autoScaler) SetMaxReplicasPolicy(maxReplicas func(topic string, functio
 	a.maxReplicas = maxReplicas
 }
 
+func (a *autoScaler) SetDelayScaleDownPolicy(delayScaleDown func(function string) time.Duration) {
+	a.delayScaleDown = delayScaleDown
+}
+
 func (a *autoScaler) Run() {
 	go a.receiveLoop()
 	go a.samplingLoop()
@@ -109,6 +116,7 @@ type autoScaler struct {
 	proposals                  map[FunctionId]*Proposal
 	replicas                   map[FunctionId]int // tracks all functions, including those which are not being monitored
 	maxReplicas                func(topic string, function string) int
+	delayScaleDown             func(function string) time.Duration
 	stop                       chan struct{}
 	accumulatingStopped        chan struct{}
 	samplingStopped            chan struct{}
@@ -146,7 +154,9 @@ func (a *autoScaler) StartMonitoring(topic string, function FunctionId) error {
 
 	funcTotals[function] = &metricsTotals{}
 
-	a.proposals[function] = NewProposal(a.requiredScaleDownProposals)
+	a.proposals[function] = NewProposal(func() time.Duration {
+		return a.delayScaleDown(function.Function);
+	})
 
 	return nil
 }
@@ -252,7 +262,6 @@ func (a *autoScaler) TakeSample() {
 			} else {
 				proposedReplicas = int(math.Floor(float64(a.replicas[fn]) * float64(mt.transmitCount) / float64(mt.receiveCount)))
 			}
-			// FIXME: support fn.Spec.MaxReplicas
 			maxReplicas := a.maxReplicas(topic, fn.Function)
 			if proposedReplicas > maxReplicas {
 				proposedReplicas = maxReplicas

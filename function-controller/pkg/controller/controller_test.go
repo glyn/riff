@@ -41,6 +41,7 @@ var _ = Describe("Controller", func() {
 		topicHandlers       cache.ResourceEventHandlerFuncs
 		closeCh             chan struct{}
 		maxReplicasPolicy   func(string, string) int
+		delayScaleDownPolicy func(function string) time.Duration
 	)
 
 	BeforeEach(func() {
@@ -74,6 +75,9 @@ var _ = Describe("Controller", func() {
 		autoScaler = new(mockautoscaler.AutoScaler)
 		autoScaler.On("SetMaxReplicasPolicy", mock.AnythingOfType("func(string, string) int")).Run(func(args mock.Arguments) {
 			maxReplicasPolicy = args.Get(0).(func(string, string) int)
+		})
+		autoScaler.On("SetDelayScaleDownPolicy", mock.AnythingOfType("func(string) time.Duration")).Run(func(args mock.Arguments) {
+			delayScaleDownPolicy = args.Get(0).(func(function string) time.Duration)
 		})
 		autoScaler.On("Run")
 		autoScaler.On("Close").Return(nil)
@@ -252,6 +256,50 @@ var _ = Describe("Controller", func() {
 					Eventually(func() int { return maxReplicasPolicy("input", "fn"); }).Should(Equal(5))
 					closeCh <- struct{}{}
 				})
+			})
+		})
+	})
+
+	Describe("delayScaleDownPolicy", func() {
+		Context("when the function does not specify idleTimeoutMs", func() {
+		    BeforeEach(func() {
+				fn := &v1.Function{ObjectMeta: metav1.ObjectMeta{Name: "fn"}, Spec: v1.FunctionSpec{Input: "input"}}
+				deployer.On("Deploy", fn).Return(nil)
+				functionHandlers.AddFunc(fn)
+
+				proposal := make(map[autoscaler.FunctionId]int)
+				proposal[autoscaler.FunctionId{"fn"}] = 0
+				autoScaler.On("Propose").Return(proposal)
+
+				go ctrl.Run(closeCh)
+			})
+
+			It("should consistently return the default scale down delay", func() {
+				// The controller takes a little while to set up the topic and function.
+				Consistently(func() time.Duration { return delayScaleDownPolicy("fn"); }).Should(Equal(time.Second*10))
+				closeCh <- struct{}{}
+			})
+		})
+
+		Context("when the function specifies idleTimeoutMs", func() {
+			var idleTimeoutMs int32
+		    BeforeEach(func() {
+				idleTimeoutMs = 300
+				fn := &v1.Function{ObjectMeta: metav1.ObjectMeta{Name: "fn"}, Spec: v1.FunctionSpec{Input: "input", IdleTimeoutMs: &idleTimeoutMs}}
+				deployer.On("Deploy", fn).Return(nil)
+				functionHandlers.AddFunc(fn)
+
+				proposal := make(map[autoscaler.FunctionId]int)
+				proposal[autoscaler.FunctionId{"fn"}] = 0
+				autoScaler.On("Propose").Return(proposal)
+
+				go ctrl.Run(closeCh)
+			})
+
+			It("should eventually return the specified scale down delay", func() {
+				// The controller takes a little while to set up the function.
+				Eventually(func() time.Duration { return delayScaleDownPolicy("fn"); }).Should(Equal(time.Millisecond*time.Duration(idleTimeoutMs)))
+				closeCh <- struct{}{}
 			})
 		})
 	})

@@ -20,18 +20,19 @@ import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	"github.com/projectriff/riff/function-controller/pkg/controller/autoscaler"
+	"time"
 )
 
 var _ = Describe("Proposal", func() {
-
-	const requiredScaleDownProposals = 10
 
 	var (
 		proposal *autoscaler.Proposal
 	)
 
 	BeforeEach(func() {
-		proposal = autoscaler.NewProposal(requiredScaleDownProposals)
+		proposal = autoscaler.NewProposal(func() time.Duration {
+			return time.Millisecond * 100
+		})
 	})
 
 	It("should initially propose zero", func() {
@@ -48,29 +49,17 @@ var _ = Describe("Proposal", func() {
 
 		})
 
-		Context("when scaled down insufficiently often", func() {
+		Context("when scaled down", func() {
 			BeforeEach(func() {
-				for i := 0; i < requiredScaleDownProposals-1; i++ {
-					proposal.Propose(0)
-				}
+				proposal.Propose(0)
 			})
 
 			It("should continue to propose the scaled up value", func() {
-				Expect(proposal.Get()).To(Equal(1))
-
-			})
-		})
-
-		Context("when scaled back down sufficiently often", func() {
-			BeforeEach(func() {
-				for i := 0; i < requiredScaleDownProposals; i++ {
-					proposal.Propose(0)
-				}
+				Consistently(func() int { return proposal.Get(); }, time.Millisecond*50).Should(Equal(1))
 			})
 
-			It("should propose the scaled down value", func() {
-				Expect(proposal.Get()).To(Equal(0))
-
+			It("should eventually propose the scaled down value", func() {
+				Eventually(func() int { return proposal.Get(); }, time.Millisecond*150).Should(Equal(0))
 			})
 		})
 	})
@@ -85,45 +74,38 @@ var _ = Describe("Proposal", func() {
 
 		})
 
-		Context("when scaled down in stages but insufficiently often", func() {
+		Context("when scaled down in stages but not for sufficiently long", func() {
 			BeforeEach(func() {
-				for i := 0; i < 5; i++ {
-					proposal.Propose(8)
-				}
-				for i := 0; i < requiredScaleDownProposals-6; i++ {
-					proposal.Propose(4)
-				}
+				proposal.Propose(8)
+				time.Sleep(time.Millisecond * 10)
+				proposal.Propose(4)
 			})
 
 			It("should continue to propose the scaled up value", func() {
-				Expect(proposal.Get()).To(Equal(10))
+				Consistently(func() int { return proposal.Get(); }, time.Millisecond*50).Should(Equal(10))
 			})
 		})
 
-		Context("when scaled down in stages but insufficiently often and with a 'blip'", func() {
+		Context("when scaled down in stages but not for sufficiently long and with a 'blip'", func() {
 			BeforeEach(func() {
-				for i := 0; i < 5; i++ {
-					proposal.Propose(8)
-				}
+				proposal.Propose(8)
+				time.Sleep(time.Millisecond * 10)
 				proposal.Propose(9)
-				for i := 0; i < requiredScaleDownProposals-7; i++ {
-					proposal.Propose(4)
-				}
+				time.Sleep(time.Millisecond * 10)
+				proposal.Propose(4)
 			})
 
 			It("should continue to propose the scaled up value", func() {
-				Expect(proposal.Get()).To(Equal(10))
+				Consistently(func() int { return proposal.Get(); }, time.Millisecond*50).Should(Equal(10))
 			})
 		})
 
-		Context("when scaled back down in stages sufficiently often", func() {
+		Context("when scaled back down in stages sufficiently long", func() {
 			BeforeEach(func() {
-				for i := 0; i < 5; i++ {
-					proposal.Propose(8)
-				}
-				for i := 0; i < requiredScaleDownProposals-5; i++ {
-					proposal.Propose(4)
-				}
+				proposal.Propose(8)
+				time.Sleep(time.Millisecond * 10)
+				proposal.Propose(4)
+				time.Sleep(time.Millisecond * 90)
 			})
 
 			It("should propose the final scaled down value", func() {
@@ -136,7 +118,7 @@ var _ = Describe("Proposal", func() {
 				})
 
 				It("should propose the previous scaled down value", func() {
-					Expect(proposal.Get()).To(Equal(4))
+					Consistently(func() int { return proposal.Get(); }, time.Millisecond*50).Should(Equal(4))
 				})
 			})
 		})

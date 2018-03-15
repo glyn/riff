@@ -16,20 +16,19 @@
 
 package autoscaler
 
+import "time"
+
 type Proposal struct {
-	delayLimit    int
+	delayPolicy   func() time.Duration
 	value         int
 	previousValue int
-	delay         int
+	delayDeadline time.Time
 }
 
-// NewProposal creates a proposal for which scaling down only takes effect after the given number of proposals.
-func NewProposal(requiredScaleDownProposals int) *Proposal {
-	if requiredScaleDownProposals < 1 {
-		panic("requiredScaleDownProposals must be positive")
-	}
+// NewProposal creates a proposal for which scaling down only takes effect after the delay returned by the given policy.
+func NewProposal(delayPolicy func() time.Duration) *Proposal {
 	return &Proposal{
-		delayLimit: requiredScaleDownProposals - 1,
+		delayPolicy: delayPolicy,
 	}
 }
 
@@ -38,34 +37,30 @@ func (b *Proposal) Propose(proposal int) {
 		panic("Proposed numbers of replicas must be non-negative")
 	}
 
+	now := time.Now()
 	if proposal > b.value {
-		if b.delay > 0 && proposal < b.previousValue {
+		if now.Before(b.delayDeadline) && proposal < b.previousValue {
 			b.value = proposal
-			b.delay--
 		} else {
 			// Scale up immediately
 			b.value = proposal
 			b.previousValue = proposal
-			b.delay = 0
+			b.delayDeadline = now
 		}
 	} else if proposal < b.value {
 		// Defer scaling down
-		if b.delay == 0 {
-			b.delay = b.delayLimit
+		if now.After(b.delayDeadline) {
+			b.delayDeadline = now.Add(b.delayPolicy())
 			b.previousValue = b.value
 		} else {
 			// Include this scaling down in the previous delay
-			b.delay--
 		}
 		b.value = proposal
-	} else if b.delay > 0 {
-		// Scaling down is deferred and the proposal is unchanged, so bring forward scaling down
-		b.delay--
 	}
 }
 
 func (b *Proposal) Get() int {
-	if b.delay > 0 {
+	if time.Now().Before(b.delayDeadline) {
 		return b.previousValue
 	}
 	return b.value
