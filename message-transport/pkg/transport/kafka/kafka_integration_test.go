@@ -24,11 +24,11 @@ import (
 	"strings"
 	"os"
 	"github.com/projectriff/riff/message-transport/pkg/transport"
-	"github.com/bsm/sarama-cluster"
 	"github.com/projectriff/riff/message-transport/pkg/message"
-	"github.com/Shopify/sarama"
 	"time"
 	"fmt"
+	"github.com/Shopify/sarama"
+	cluster "github.com/bsm/sarama-cluster"
 )
 
 var _ = Describe("Kafka Integration", func() {
@@ -37,6 +37,8 @@ var _ = Describe("Kafka Integration", func() {
 		topic string
 		producer    transport.Producer
 		consumer    transport.Consumer
+		groupId     string
+		inspector   transport.Inspector
 		testMessage message.Message
 	)
 
@@ -52,6 +54,21 @@ var _ = Describe("Kafka Integration", func() {
 		producer, err = kafka.NewProducer(brokers)
 		Expect(err).NotTo(HaveOccurred())
 
+		inspector, err = kafka.NewInspector(brokers)
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("should be able to send a message to a topic and receive it back", func() {
+		err := producer.Send(topic, testMessage)
+		Expect(err).NotTo(HaveOccurred())
+
+		// It takes a while for the production to affect the queue length.
+		Eventually(func() int64{
+			queueLength, err := inspector.QueueLength(topic, groupId)
+			Expect(err).NotTo(HaveOccurred())
+			return queueLength
+		}, time.Second*10).Should(Equal(int64(1)))
+
 		config := cluster.NewConfig()
 
 		// Use "oldest" initial offset in case there is a race between the asynchronous construction of the consumer
@@ -60,20 +77,22 @@ var _ = Describe("Kafka Integration", func() {
 
 		// Use a fresh group id so that runs in close succession won't suffer from Kafka broker delays
 		// due to consumers coming and going in the same group
-		groupId := fmt.Sprintf("group-%d", time.Now().Nanosecond())
-		
-		consumer, err = kafka.NewConsumer(brokers, groupId, []string{topic}, config)
-		Expect(err).NotTo(HaveOccurred())
-	})
+		groupId = fmt.Sprintf("group-%d", time.Now().Nanosecond())
 
-	It("should be able to send a message to a topic and receive it back", func() {
-		err := producer.Send(topic, testMessage)
+		consumer, err = kafka.NewConsumer(brokers(), groupId, []string{topic}, config)
 		Expect(err).NotTo(HaveOccurred())
 
 		messages := consumer.Messages()
-		receivedMessage := <-messages
+        receivedMessage := <-messages
 
-		Expect(receivedMessage).To(Equal(testMessage))
+        Expect(receivedMessage).To(Equal(testMessage))
+
+		// It takes a while for the consumption to affect the queue length.
+		Eventually(func() int64{
+			queueLength, err := inspector.QueueLength(topic, groupId)
+			Expect(err).NotTo(HaveOccurred())
+			return queueLength
+		}, time.Second*10).Should(Equal(int64(0)))
 	})
 
 })

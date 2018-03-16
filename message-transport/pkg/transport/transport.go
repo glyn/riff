@@ -39,3 +39,11 @@ type Consumer interface {
 	// Messages returns a channel which receives messages.
 	Messages() <-chan message.Message
 }
+
+//go:generate mockery -name=Inspector -output mocktransport -outpkg mocktransport
+
+// Inspector is an interface for inspecting the transport.
+type Inspector interface {
+	// QueueLength returns the queue length of the given topic from the perspective of the given function.
+	QueueLength(topic string, function string) (int64, error)
+}
