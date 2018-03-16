@@ -21,6 +21,7 @@ import (
 	"github.com/projectriff/riff/message-transport/pkg/message"
 	"log"
 	"encoding/json"
+	"io"
 )
 
 func NewReceiver(consumer transport.Consumer) (*metricsReceiver) {
@@ -35,7 +36,7 @@ func NewReceiver(consumer transport.Consumer) (*metricsReceiver) {
 				close(producerMetricsChan)
 				break
 			}
-			pm, cm := demarshallMetricMessage(msg)
+			pm, cm := unmarshallMetricMessage(msg)
 			if pm != nil {
 				producerMetricsChan <- *pm
 			}
@@ -48,12 +49,14 @@ func NewReceiver(consumer transport.Consumer) (*metricsReceiver) {
 	return &metricsReceiver{
 		producerMetricsChan: producerMetricsChan,
 		consumerMetricsChan: consumerMetricsChan,
+		consumer: consumer,
 	}
 }
 
 type metricsReceiver struct {
 	producerMetricsChan chan ProducerAggregateMetric
 	consumerMetricsChan chan ConsumerAggregateMetric
+	consumer transport.Consumer
 }
 
 func (mr *metricsReceiver) ProducerMetrics() <-chan ProducerAggregateMetric {
@@ -66,7 +69,7 @@ func (mr *metricsReceiver) ConsumerMetrics() <-chan ConsumerAggregateMetric {
 
 const sourceHeaderKey = "source"
 
-func demarshallMetricMessage(msg message.Message) (*ProducerAggregateMetric, *ConsumerAggregateMetric) {
+func unmarshallMetricMessage(msg message.Message) (*ProducerAggregateMetric, *ConsumerAggregateMetric) {
 	var (
 		producerMetric *ProducerAggregateMetric = nil
 		consumerMetric *ConsumerAggregateMetric = nil
@@ -85,7 +88,7 @@ func demarshallMetricMessage(msg message.Message) (*ProducerAggregateMetric, *Co
 			var pm ProducerAggregateMetric
 			err := json.Unmarshal(msg.Payload(), &pm)
 			if err != nil {
-				log.Printf("Error demarshalling producer metric: %v", err)
+				log.Printf("Error unmarshalling producer metric: %v", err)
 			}
 			producerMetric = &pm
 
@@ -93,7 +96,7 @@ func demarshallMetricMessage(msg message.Message) (*ProducerAggregateMetric, *Co
 			var cm ConsumerAggregateMetric
 			err := json.Unmarshal(msg.Payload(), &cm)
 			if err != nil {
-				log.Printf("Error demarshalling consumer metric: %v", err)
+				log.Printf("Error unmarshalling consumer metric: %v", err)
 			}
 			consumerMetric = &cm
 
@@ -102,4 +105,11 @@ func demarshallMetricMessage(msg message.Message) (*ProducerAggregateMetric, *Co
 		}
 	}
 	return producerMetric, consumerMetric
+}
+
+func (mr *metricsReceiver) Close() error {
+	if consumer, ok := mr.consumer.(io.Closer); ok {
+		return consumer.Close()
+	}
+	return nil
 }
