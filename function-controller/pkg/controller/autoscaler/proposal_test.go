@@ -46,10 +46,9 @@ var _ = Describe("Proposal", func() {
 
 		It("should immediately propose the scaled up value", func() {
 			Expect(proposal.Get()).To(Equal(1))
-
 		})
 
-		Context("when scaled down", func() {
+		Context("when scaled down to 0", func() {
 			BeforeEach(func() {
 				proposal.Propose(0)
 			})
@@ -74,52 +73,28 @@ var _ = Describe("Proposal", func() {
 
 		})
 
-		Context("when scaled down in stages but not for sufficiently long", func() {
+		Context("when scaled down in stages but not to 0", func() {
 			BeforeEach(func() {
 				proposal.Propose(8)
-				time.Sleep(time.Millisecond * 10)
 				proposal.Propose(4)
 			})
 
-			It("should continue to propose the scaled up value", func() {
-				Consistently(func() int { return proposal.Get(); }, time.Millisecond*50).Should(Equal(10))
+			It("should immediately propose the scaled down value", func() {
+				Expect(proposal.Get()).To(Equal(4))
 			})
 		})
 
-		Context("when scaled down in stages but not for sufficiently long and with a 'blip'", func() {
+		Context("when scaled down to 0 but with a 'blip'", func() {
 			BeforeEach(func() {
-				proposal.Propose(8)
+				proposal.Propose(0)
 				time.Sleep(time.Millisecond * 10)
 				proposal.Propose(9)
 				time.Sleep(time.Millisecond * 10)
-				proposal.Propose(4)
+				proposal.Propose(0)
 			})
 
-			It("should continue to propose the scaled up value", func() {
-				Consistently(func() int { return proposal.Get(); }, time.Millisecond*50).Should(Equal(10))
-			})
-		})
-
-		Context("when scaled back down in stages sufficiently long", func() {
-			BeforeEach(func() {
-				proposal.Propose(8)
-				time.Sleep(time.Millisecond * 10)
-				proposal.Propose(4)
-				time.Sleep(time.Millisecond * 90)
-			})
-
-			It("should propose the final scaled down value", func() {
-				Expect(proposal.Get()).To(Equal(4))
-			})
-
-			Context("when scaled down again but insufficiently often", func() {
-				BeforeEach(func() {
-					proposal.Propose(2)
-				})
-
-				It("should propose the previous scaled down value", func() {
-					Consistently(func() int { return proposal.Get(); }, time.Millisecond*50).Should(Equal(4))
-				})
+			It("should continue to propose the blip value", func() {
+				Consistently(func() int { return proposal.Get(); }, time.Millisecond*50).Should(Equal(9))
 			})
 		})
 	})

@@ -38,17 +38,12 @@ func (b *Proposal) Propose(proposal int) {
 	}
 
 	now := time.Now()
-	if proposal > b.value {
-		if now.Before(b.delayDeadline) && proposal < b.previousValue {
-			b.value = proposal
-		} else {
-			// Scale up immediately
-			b.value = proposal
-			b.previousValue = proposal
-			b.delayDeadline = now
-		}
+	if proposal > 0 {
+		b.value = proposal
+		b.previousValue = proposal
+		b.delayDeadline = now
 	} else if proposal < b.value {
-		// Defer scaling down
+		// Defer scaling to 0
 		if now.After(b.delayDeadline) {
 			b.delayDeadline = now.Add(b.delayPolicy())
 			b.previousValue = b.value
