@@ -19,65 +19,37 @@ package metrics
 import (
 	"github.com/projectriff/riff/message-transport/pkg/transport"
 	"github.com/projectriff/riff/message-transport/pkg/message"
-	"log"
-	"encoding/json"
-	"time"
 	"io"
 )
-
-const producerSource = "producer"
-
-// ProducerAggregateMetric represents the transmission of a number of messages to a topic by a producer in a time interval.
-type ProducerAggregateMetric struct {
-	Topic      string
-	ProducerId string
-	Interval   time.Duration
-	Count      int32
-}
 
 // NewProducer decorates the given delegate to send producer metrics for the given producer id to the given topic using the
 // given metrics producer. The given producer id can be any unique identifier for the producer and can be pod
 // instance-specific (that is, it need not carry across when a pod is restarted).
 func NewProducer(delegate transport.Producer, producerId string, metricsTopic string, metricsProducer transport.Producer) *producer {
 	return &producer{
-		delegate:        delegate,
-		producerId:      producerId,
-		metricsTopic:    metricsTopic,
-		metricsProducer: metricsProducer,
+		delegate: delegate,
+		aggregator: &producerAggregator{
+			producerId:      producerId,
+			metricsTopic:    metricsTopic,
+			metricsProducer: metricsProducer,
+		},
 	}
 }
 
 type producer struct {
-	delegate        transport.Producer
-	producerId      string
-	metricsTopic    string
-	metricsProducer transport.Producer
+	delegate   transport.Producer
+	aggregator *producerAggregator
 }
 
 func (p *producer) Send(topic string, msg message.Message) error {
 	err := p.delegate.Send(topic, msg)
 	if err == nil {
-		metricsErr := p.metricsProducer.Send(p.metricsTopic, p.createProducerMetricMessage(topic))
+		metricsErr := p.aggregator.send(topic)
 		if metricsErr != nil {
-			log.Printf("Failed to send producer metrics: %v", metricsErr)
 			return metricsErr
 		}
 	}
 	return err
-}
-
-func (p *producer) createProducerMetricMessage(topic string) message.Message {
-	metric, err := json.Marshal(ProducerAggregateMetric{
-		Topic: topic,
-		ProducerId: p.producerId,
-		// TODO: aggregate metrics into suitable intervals
-		Interval: time.Duration(0),
-		Count: 1,
-	})
-	if err != nil { // should never happen
-		panic(err)
-	}
-	return message.NewMessage(metric, message.Headers{"source": []string{producerSource}})
 }
 
 func (p *producer) Errors() <-chan error {
@@ -90,13 +62,9 @@ func (p *producer) Close() error {
 		err = delegate.Close()
 	}
 
-	var err2 error = nil
-	if metricsProducer, ok := p.metricsProducer.(io.Closer); ok {
-		err2 = metricsProducer.Close()
-	}
+	err2 := p.aggregator.Close()
 	if err != nil {
 		return err
 	}
 	return err2
-
 }
