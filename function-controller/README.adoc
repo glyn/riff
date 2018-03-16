@@ -6,11 +6,11 @@ their input topics.
 Scaling up is capped to the minimum of `maxReplicas` in the function configuration (if set) and, when Kafka
 is being used as a message broker, the number of partitions in the function's input topic.
 
-Each replica of a function keeps running for at least `idleTimeoutMs` millseconds if this is specified
+The last replica of a function keeps running for at least `idleTimeoutMs` millseconds if this is specified
 in the function configuration and for at least 10 seconds otherwise.
 
 For example, the following function configuration limits the number of replicas to 3 even if the number of
-topic partitions exceeds 3, and keeps each replica running for at least 60 seconds.
+topic partitions exceeds 3, and keeps the last replica running for at least 60 seconds.
 
 ```yaml
 spec:
