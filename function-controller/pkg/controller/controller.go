@@ -366,12 +366,14 @@ func New(topicInformer informersV1.TopicInformer,
 	})
 
 	auto.SetDelayScaleDownPolicy(func(function string) time.Duration {
+		delay := defaultScaleDownDelay
 		if fn, ok := pctrl.functions[fnKey{function}]; ok {
 			if fn.Spec.IdleTimeoutMs != nil {
-				return time.Millisecond * time.Duration(*fn.Spec.IdleTimeoutMs)
+				delay = time.Millisecond * time.Duration(*fn.Spec.IdleTimeoutMs)
 			}
 		}
-		return defaultScaleDownDelay
+		log.Printf("Delaying scaling down %v to 0 by %v", function, delay)
+		return delay
 	})
 
 	return pctrl

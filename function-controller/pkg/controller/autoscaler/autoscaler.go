@@ -122,10 +122,13 @@ func (a *autoScaler) Propose() map[FunctionId]int {
 	proposals := make(map[FunctionId]int)
 	for funcId, proposal := range a.proposals {
 		replicas := proposal.Get()
-		// If zero replicas are proposed, check the queue of work to the function.
-		if replicas == 0 {
-			if !a.emptyQueue(funcId) {
+		// If zero replicas are proposed *and* there is already at least one replica, check the queue of work to the function.
+		// The queue length is not allowed to initiate scaling up from 0 to 1 as that would be confused with rate-based autoscaling.
+		if replicas == 0 && a.replicas[funcId] != 0 {
+			empty, length := a.emptyQueue(funcId)
+			if !empty {
 				// There may be work to do, so propose 1 replica instead.
+				log.Printf("Ignoring proposal to scale %v to 0 replicas since queue length is %d", funcId.Function, length)
 				replicas = 1
 			}
 		}
@@ -134,20 +137,20 @@ func (a *autoScaler) Propose() map[FunctionId]int {
 	return proposals
 }
 
-func (a *autoScaler) emptyQueue(funcId FunctionId) bool {
+func (a *autoScaler) emptyQueue(funcId FunctionId) (bool, int64) {
 	for topic, funcTotals := range a.totals {
 		if _, ok := funcTotals[funcId]; ok {
 			queueLen, err := a.transportInspector.QueueLength(topic, funcId.Function)
 			if err != nil {
 				log.Printf("Failed to obtain queue length (and will assume it is positive): %v", err)
-				return false
+				return false, -1
 			}
 			if queueLen > 0 {
-				return false
+				return false, queueLen
 			}
 		}
 	}
-	return true
+	return true, 0
 }
 
 func (a *autoScaler) StartMonitoring(topic string, function FunctionId) error {
@@ -258,7 +261,11 @@ func (a *autoScaler) calculateProposal() {
 				proposedReplicas = int(math.Floor(float64(a.replicas[fn]) * float64(mt.transmitCount) / float64(mt.receiveCount)))
 			}
 			maxReplicas := a.maxReplicas(topic, fn.Function)
+			possibleChange := proposedReplicas != a.replicas[fn]
 			if proposedReplicas > maxReplicas {
+				if possibleChange {
+					log.Printf("Proposing %v should have maxReplicas (%d) instead of %d replicas", fn, maxReplicas, proposedReplicas)
+				}
 				proposedReplicas = maxReplicas
 			}
 
