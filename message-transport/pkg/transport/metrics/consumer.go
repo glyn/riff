@@ -27,13 +27,15 @@ import (
 
 const consumerSource = "consumer"
 
-// ConsumerAggregateMetric represents the reception of a number of messages from a topic by a consumer group in a time interval.
+// ConsumerAggregateMetric represents the reception of a number of messages from a topic by a consumer group taking a
+// duration of time to process. For example, if 10 messages are received, but each takes 1 millisecond to process, then
+// the processing time will be 10 milliseconds, regardless of the interval of time over which the messages were received.
 type ConsumerAggregateMetric struct {
-	Topic         string
-	ConsumerGroup string
-	Pod           string
-	Interval      time.Duration
-	Count         int32
+	Topic          string
+	ConsumerGroup  string
+	Pod            string
+	ProcessingTime time.Duration
+	Count          int32
 }
 
 // NewConsumer decorates the given delegate to send consumer metrics for the given consumer group and pod to the given topic
@@ -55,8 +57,8 @@ func (c *consumer) createConsumerMetricMessage(topic string) message.Message {
 		ConsumerGroup: c.consumerGroup,
 		Pod:           c.pod,
 		// TODO: aggregate metrics into suitable intervals
-		Interval: time.Duration(0),
-		Count:    1,
+		ProcessingTime: time.Duration(0),
+		Count:          1,
 	})
 	if err != nil { // should never happen
 		panic(err)

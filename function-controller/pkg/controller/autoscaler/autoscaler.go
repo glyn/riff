@@ -21,13 +21,12 @@ import (
 	"fmt"
 	"sync"
 	"time"
-	"math"
 	"log"
 	"io"
 	"github.com/projectriff/riff/message-transport/pkg/transport"
 )
 
-//go:generate mockery -name=AutoScaler -output mockautoscaler -outpkg mockautoscaler
+// go:generate mockery -name=AutoScaler -output mockautoscaler -outpkg mockautoscaler
 
 type AutoScaler interface {
 	// Set maximum replica count policy.
@@ -66,6 +65,22 @@ type FunctionId struct {
 const MaxUint = ^uint(0)
 const MaxInt = int(MaxUint >> 1)
 
+// PID controller coefficients
+const (
+	innerKp = 0.05
+	innerKi = 0
+	innerKd = 0
+	outerKp = 0.5
+	outerKi = 3
+	outerKd = 0
+)
+
+type queueLength int64
+type queueRateOfChange int64
+
+const innerInitialSetpoint = queueRateOfChange(0) // somewhat arbitrary value
+const outerSetpoint = queueLength(5)
+
 // NewAutoScaler constructs an autoscaler instance using the given metrics receiver and the given transport inspector.
 func NewAutoScaler(metricsReceiver metrics.MetricsReceiver, transportInspector transport.Inspector) *autoScaler {
 	return &autoScaler{
@@ -98,22 +113,23 @@ func (a *autoScaler) Run() {
 }
 
 type autoScaler struct {
-	mutex                      *sync.Mutex // nil when autoScaler is closed
-	metricsReceiver            metrics.MetricsReceiver
-	transportInspector         transport.Inspector
-	totals                     map[string]map[FunctionId]*metricsTotals
-	scalers                    map[FunctionId]scaler
-	replicas                   map[FunctionId]int // tracks all functions, including those which are not being monitored
-	maxReplicas                func(function FunctionId) int
-	delayScaleDown             func(function FunctionId) time.Duration
-	stop                       chan struct{}
-	accumulatingStopped        chan struct{}
+	mutex               *sync.Mutex // nil when autoScaler is closed
+	metricsReceiver     metrics.MetricsReceiver
+	transportInspector  transport.Inspector
+	totals              map[string]map[FunctionId]*metricsTotals
+	scalers             map[FunctionId]scaler
+	replicas            map[FunctionId]int // tracks all functions, including those which are not being monitored
+	maxReplicas         func(function FunctionId) int
+	delayScaleDown      func(function FunctionId) time.Duration
+	stop                chan struct{}
+	accumulatingStopped chan struct{}
 }
 
 // metrics counts the number of messages transmitted to a Subscription's topic and received by the Subscription.
 type metricsTotals struct {
-	transmitCount int32
-	receiveCount  int32
+	transmitCount       int32
+	receiveCount        int32
+	totalProcessingTime time.Duration
 }
 
 func (a *autoScaler) Propose() map[FunctionId]int {
@@ -245,6 +261,7 @@ func (a *autoScaler) receiveConsumerMetric(cm metrics.ConsumerAggregateMetric) {
 		mt, ok := funcTotals[FunctionId{cm.ConsumerGroup}]
 		if ok {
 			mt.receiveCount += cm.Count
+			mt.totalProcessingTime += cm.ProcessingTime
 		}
 	}
 }
@@ -279,17 +296,38 @@ func compose(a adjuster, s scaler) scaler {
 }
 
 func (a *autoScaler) metricsScaler(fn FunctionId) scaler {
+
+	inner := newPidController(innerKp, innerKi, innerKd)
+	outer := newPidController(outerKp, outerKi, outerKd)
+	innerSetpoint := innerInitialSetpoint
+	queueLen := queueLength(0)
+
 	return func(mt *metricsTotals) int {
 		var proposedReplicas int
-		if mt.receiveCount == 0 {
-			if mt.transmitCount == 0 {
-				proposedReplicas = 0
-			} else {
-				proposedReplicas = 1 // arbitrary value
-			}
-		} else {
-			proposedReplicas = int(math.Ceil(float64(a.replicas[fn]) * float64(mt.transmitCount) / float64(mt.receiveCount)))
+
+		queueLen += queueLength(mt.transmitCount - mt.receiveCount) // TODO: may not be accurate - use broker's queue length
+
+		innerSetpoint = queueRateOfChange(outer.work(int64(queueLen - outerSetpoint)))
+
+		rateOfChange := queueRateOfChange(mt.transmitCount - mt.receiveCount)
+		deltaProposedReplicas := int(inner.work(int64(rateOfChange - innerSetpoint))) // let's hope this int64->int conversion doesn't truncate
+		proposedReplicas = a.replicas[fn] - deltaProposedReplicas
+
+		if proposedReplicas < 0 {
+			proposedReplicas = 0
 		}
+
+		// if mt.receiveCount == 0 {
+		// 	if mt.transmitCount == 0 {
+		// 		proposedReplicas = 0
+		// 	} else {
+		// 		proposedReplicas = 1 // arbitrary value
+		// 	}
+		// } else {
+		// 	averageProcessingTime := mt.totalProcessingTime / time.Duration(mt.receiveCount)
+		// 	integrator.add(averageProcessingTime)
+		// 	proposedReplicas = int(math.Ceil(float64(a.replicas[fn]) * float64(mt.transmitCount) / float64(mt.receiveCount)))
+		// }
 		return proposedReplicas
 	}
 }
@@ -332,9 +370,9 @@ func (a *autoScaler) InformFunctionReplicas(function FunctionId, replicas int) {
 }
 
 func (a *autoScaler) Close() error {
-	a.mutex.Lock()
 	close(a.stop)
 	<-a.accumulatingStopped
+	a.mutex.Lock()
 	a.mutex = nil // ensure autoScaler can no longer be used
 	return nil
 }

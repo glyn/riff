@@ -43,3 +43,8 @@ debug-dockerize: $(GO_SOURCES) ../vendor
 
 kubectl-apply:
 	kubectl apply -f config/deployment.yaml
+
+simulation:
+	go build pkg/controller/autoscaler/simulator/simulator.go
+	./simulator
+	gnuplot -c pkg/controller/autoscaler/simulator/simulator.plt > simulation-results.png

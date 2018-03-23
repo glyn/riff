@@ -34,6 +34,7 @@ func NewDelayer(delayPolicy func() time.Duration) *Delayer {
 
 func (b *Delayer) Delay(proposal int) *Delayer {
 	if proposal < 0 {
+		// This can occur if the autoscaler becomes unstable and the calculation overflows the maximum int value
 		panic("Proposed numbers of replicas must be non-negative")
 	}
 
