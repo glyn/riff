@@ -70,9 +70,9 @@ const (
 	innerKp = 0.05
 	innerKi = 0
 	innerKd = 0
-	outerKp = 0.5
-	outerKi = 3
-	outerKd = 0
+	outerKp = 0.1
+	outerKi = 0.1
+	outerKd = 0.05
 )
 
 type queueLength int64
@@ -297,9 +297,9 @@ func compose(a adjuster, s scaler) scaler {
 
 func (a *autoScaler) metricsScaler(fn FunctionId) scaler {
 
-	inner := newPidController(innerKp, innerKi, innerKd)
+	//inner := newPidController(innerKp, innerKi, innerKd)
 	outer := newPidController(outerKp, outerKi, outerKd)
-	innerSetpoint := innerInitialSetpoint
+	//innerSetpoint := innerInitialSetpoint
 	queueLen := queueLength(0)
 
 	return func(mt *metricsTotals) int {
@@ -307,11 +307,17 @@ func (a *autoScaler) metricsScaler(fn FunctionId) scaler {
 
 		queueLen += queueLength(mt.transmitCount - mt.receiveCount) // TODO: may not be accurate - use broker's queue length
 
-		innerSetpoint = queueRateOfChange(outer.work(int64(queueLen - outerSetpoint)))
+		//innerSetpoint = queueRateOfChange(outer.work(int64(queueLen - outerSetpoint)))
+		//
+		//rateOfChange := queueRateOfChange(mt.transmitCount - mt.receiveCount)
+		//deltaProposedReplicas := int(inner.work(int64(rateOfChange - innerSetpoint))) // let's hope this int64->int conversion doesn't truncate
 
-		rateOfChange := queueRateOfChange(mt.transmitCount - mt.receiveCount)
-		deltaProposedReplicas := int(inner.work(int64(rateOfChange - innerSetpoint))) // let's hope this int64->int conversion doesn't truncate
-		proposedReplicas = a.replicas[fn] - deltaProposedReplicas
+		// Experiment with single PID controller based on queue length
+
+		deltaProposedReplicas := int(outer.work(int64(queueLen - outerSetpoint)))
+
+		//proposedReplicas = a.replicas[fn] - deltaProposedReplicas
+		proposedReplicas = deltaProposedReplicas
 
 		if proposedReplicas < 0 {
 			proposedReplicas = 0

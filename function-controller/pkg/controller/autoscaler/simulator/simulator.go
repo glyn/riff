@@ -25,7 +25,8 @@ import (
 	"time"
 )
 
-const simulationSteps = 1000
+//const simulationSteps = 1000
+const simulationSteps = 10
 
 func main() {
 	fmt.Println("starting to drive autoscaler with simulated workload")
@@ -39,7 +40,8 @@ func main() {
 	stubFunctionID := autoscaler.FunctionId{Function: "stub function"}
 
 	receiver := newStubReceiver()
-	inspector := newStubInspector()
+	queueLen := int64(0)
+	inspector := newStubInspector(&queueLen)
 
 	scaler := autoscaler.NewAutoScaler(receiver, inspector)
 	defer scaler.Close()
@@ -56,7 +58,6 @@ func main() {
 
 	replicas := 0
 
-	queueLen := int64(0)
 
 	for i := 0; i < simulationSteps; i++ {
 		simUpdater.UpdateProducerFor(i, &queueLen)
@@ -98,16 +99,17 @@ func (rec *stubReceiver) ConsumerMetrics() <-chan metrics.ConsumerAggregateMetri
 }
 
 func (rec *stubReceiver) UpdateProducerFor(simulationRound int, queueLen *int64) {
-	numToWrite := 0
-	if simulationRound < 100 {
-		numToWrite = 20
-	} else if simulationRound < 500 {
-		numToWrite = 40
-	} else if simulationRound < 750 {
-		numToWrite = 0
-	} else {
-		numToWrite = 20
-	}
+	numToWrite := 20
+	//numToWrite := 0
+	//if simulationRound < 100 {
+	//	numToWrite = 20
+	//} else if simulationRound < 500 {
+	//	numToWrite = 40
+	//} else if simulationRound < 750 {
+	//	numToWrite = 0
+	//} else {
+	//	numToWrite = 20
+	//}
 	for i := numToWrite; i > 0; i-- {
 		rec.producerMetricsChan <- metrics.ProducerAggregateMetric{Topic: "topic", Count: 1}
 		(*queueLen)++
@@ -137,12 +139,15 @@ func newStubReceiver() *stubReceiver {
 }
 
 type stubInspector struct {
+	queueLen *int64
 }
 
-func newStubInspector() *stubInspector {
-	return &stubInspector{}
+func newStubInspector(queueLen *int64) *stubInspector {
+	return &stubInspector{
+		queueLen: queueLen,
+	}
 }
 
 func (i *stubInspector) QueueLength(topic string, function string) (int64, error) {
-	return 0, nil
+	return *i.queueLen, nil
 }
