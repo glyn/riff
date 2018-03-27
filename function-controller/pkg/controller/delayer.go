@@ -43,7 +43,7 @@ func (c *delayer) delay(in replicaCounts, combinedPositions activityCounts) (rep
 				if now.Before(start.Add(idleTimeout)) { // Timeout not elapsed, don't proceed with scale down
 					result[fn] = c.actualReplicas[fn]
 					log.Printf("Still waiting %v for %v", start.Add(idleTimeout).Sub(now), fn.name)
-					if combinedPositions[fn].end > c.previousCombinedPositions[fn].end { // Still some activity, reset the clock
+					if combinedPositions[fn].end > c.previousCombinedPositions[fn].end { // Still some activity, reset the clock // FIXME: test if producer metrics received instead
 						log.Printf("Resetting the clock for %v: %v, %v", fn.name, combinedPositions[fn], c.previousCombinedPositions[fn])
 						delete(c.scaleDownToZeroDecision, fn)
 					}
@@ -57,7 +57,7 @@ func (c *delayer) delay(in replicaCounts, combinedPositions activityCounts) (rep
 		} else if target > c.actualReplicas[fn] && c.actualReplicas[fn] > 0 { // Scaling UP
 			delete(c.scaleDownToZeroDecision, fn)
 			if pcc, ok := c.previousCombinedPositions[fn]; ok && pcc == combinedPositions[fn] {
-				// No activity since last tick. Must be rebalancing. Wait before scaling even more
+				// No activity since last tick. Must be rebalancing. Wait before scaling even more // FIXME: why does no activity imply rebalancing? may be rebalancing, but not necessarily - DELETE THIS SECTION
 				result[fn] = c.actualReplicas[fn]
 			}
 
