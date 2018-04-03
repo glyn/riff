@@ -21,25 +21,25 @@ functionController:
   replicaCount: 1
   image:
     repository: projectriff/function-controller
-    tag: latest
+    tag: 0.0.6-snapshot
     pullPolicy: IfNotPresent
   sidecar:
     image:
       repository: projectriff/function-sidecar
-      tag: latest
+      tag: 0.0.6-snapshot
 
 topicController:
   replicaCount: 1
   image:
     repository: projectriff/topic-controller
-    tag: latest
+    tag: 0.0.6-snapshot
     pullPolicy: IfNotPresent
 
 httpGateway:
   replicaCount: 1
   image:
     repository: projectriff/http-gateway
-    tag: latest
+    tag: 0.0.6-snapshot
     pullPolicy: IfNotPresent
   service:
     name: http
@@ -51,6 +51,6 @@ kafka:
   # Specifies whether the single-node development Kafka chart should be installed
   create: false
   broker:
-    nodes: projectriff-kafka.riff-system:9092
+    nodes: transport-kafka.riff-system:9092
   zookeeper:
-    nodes: projectriff-zookeeper.riff-system:2181
+    nodes: transport-zookeeper.riff-system:2181
