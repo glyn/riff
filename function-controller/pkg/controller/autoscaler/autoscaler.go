@@ -65,6 +65,37 @@ type FunctionId struct {
 const MaxUint = ^uint(0)
 const MaxInt = int(MaxUint >> 1)
 
+// PID controller parameters
+const (
+	innerInitialSetpoint = queueRateOfChange(0) // somewhat arbitrary value
+	innerKp              = 0
+	innerKi              = 0
+	innerKd              = 0
+
+	outerSetpoint     = queueLength(5)
+	k                 = 0.1
+	outerKp           = 0.5 * k  // 0.05 // 0.1 // 1
+	outerKi           = 0.05 * k // 0.0005
+	outerKd           = 0.05 * k // increasing this above 0 doesn't help the simulated workload because the replica initialisation delay tends to make the autoscaler too aggressive
+	integratorPreload = 0        // 0 to switch off
+)
+
+// Output filter parameters
+const (
+	// smoothing
+	//linearSmootherGreed = 1 // use 1 to turn off
+	linearSmootherGreed      = 1     // use 1 to turn off
+	exponentialSmootherGreed = 0.005 // use 1 to turn off
+	//exponentialSmootherGreed = 0.05 // use 1 to turn off
+	smoothIncreases = false
+
+	// stepping
+	stepSize = 1 // use 1 to turn off stepping
+)
+
+type queueLength int64
+type queueRateOfChange int64
+
 // NewAutoScaler constructs an autoscaler instance using the given metrics receiver and the given transport inspector.
 func NewAutoScaler(metricsReceiver metrics.MetricsReceiver, transportInspector transport.Inspector) *autoScaler {
 	return &autoScaler{
@@ -152,8 +183,8 @@ func (a *autoScaler) emptyQueue(funcId FunctionId) (bool, int64) {
 	return true, 0
 }
 
-func (a *autoScaler) queueLength(funcId FunctionId) int64 {
-	ql := int64(0)
+func (a *autoScaler) queueLength(funcId FunctionId) queueLength {
+	ql := queueLength(0)
 	for topic, funcTotals := range a.totals {
 		if _, ok := funcTotals[funcId]; ok {
 			queueLen, err := a.transportInspector.QueueLength(topic, funcId.Function)
@@ -161,7 +192,7 @@ func (a *autoScaler) queueLength(funcId FunctionId) int64 {
 				log.Printf("Failed to obtain queue length (and will assume it is positive): %v", err)
 				ql++
 			} else {
-				ql += queueLen
+				ql += queueLength(queueLen)
 			}
 		}
 	}
@@ -184,7 +215,8 @@ func (a *autoScaler) StartMonitoring(topic string, fn FunctionId) error {
 
 	funcTotals[fn] = &metricsTotals{}
 
-	a.scalers[fn] = decorate(a.metricsScaler(fn), a.queueLengthScaling(fn), a.limitScalingUp(fn), a.smooth(fn), a.limitScalingDown(fn), a.delay(fn))
+	//a.scalers[fn] = decorate(a.metricsScaler(fn), a.queueLengthScaling(fn), a.limitScalingUp(fn), a.smooth(fn), a.limitScalingDown(fn), a.delay(fn))
+	a.scalers[fn] = decorate(a.metricsScaler(fn), a.queueLengthScaling(fn), a.smooth(fn), a.exponentialSmoother(fn), a.step(fn), a.limitScalingUp(fn), a.limitScalingDown(fn), a.delay(fn))
 
 	return nil
 }
@@ -318,15 +350,35 @@ func (a *autoScaler) metricsScaler(fn FunctionId) scaler {
 }
 
 func (a *autoScaler) queueLengthScaling(fn FunctionId) adjuster {
-	return func(proposedReplicas int) int {
-		qLen := a.queueLength(fn)
+	//inner := newPidController(innerKp, innerKi, innerKd)
+	outer := newPidController(outerKp, outerKi, outerKd, integratorPreload)
+	//innerSetpoint := innerInitialSetpoint
+	//queueLen := queueLength(0)
 
-		if qLen == 0 {
-			// Must not return 0 if the input is 1. See comment in metricsScaler.
-			return proposedReplicas
-		} else {
-			return int(qLen) // number of replicas proportional to qLen, factor=1 for now
+	return func(inputReplicas int) int {
+		queueLen := a.queueLength(fn)
+
+		// Use PID controller
+		//innerSetpoint = queueRateOfChange(outer.work(int64(queueLen - outerSetpoint)))
+		//
+		//rateOfChange := queueRateOfChange(mt.transmitCount - mt.receiveCount)
+		//deltaProposedReplicas := int(inner.work(int64(rateOfChange - innerSetpoint))) // let's hope this int64->int conversion doesn't truncate
+
+		// Experiment with single PID controller based on queue length
+
+		proposedReplicas := int(outer.work(int64(queueLen - outerSetpoint)))
+
+		if proposedReplicas < 0 {
+			proposedReplicas = 0
 		}
+
+		// Must not return 0 if the input is 1. See comment in metricsScaler.
+		if proposedReplicas == 0 {
+			return inputReplicas
+		}
+
+		return proposedReplicas
+
 	}
 }
 
@@ -348,7 +400,13 @@ func (a *autoScaler) limitScalingUp(fn FunctionId) adjuster {
 func (a *autoScaler) smooth(id FunctionId) adjuster {
 	memory := float32(0)
 	return func(proposedReplicas int) int {
-		newMemory := interpolate(memory, proposedReplicas, 0.05)
+		// Improve responsiveness to workload increases by not smoothing out increases.
+		if !smoothIncreases && float32(proposedReplicas) > memory {
+			memory = float32(proposedReplicas)
+			return proposedReplicas
+		}
+
+		newMemory := interpolate(memory, proposedReplicas, linearSmootherGreed)
 		replicas := int(0.5 + newMemory)
 		// Special case for the 0->1 case to have immediate scale up
 		if proposedReplicas > 0 && a.replicas[id] == 0 {
@@ -362,6 +420,32 @@ func (a *autoScaler) smooth(id FunctionId) adjuster {
 
 func interpolate(current float32, target int, greed float32) float32 {
 	return current + (float32(target)-current)*greed
+}
+
+// TODO: experiment with quartic (?) Savitzky-Golay filter
+// https://uk.mathworks.com/help/curvefit/smoothing-data.html?s_tid=gn_loc_drop
+func (a *autoScaler) exponentialSmoother(id FunctionId) adjuster {
+	y := float32(0)
+	return func(proposedReplicas int) int {
+		// Improve responsiveness to workload increases by not smoothing out increases.
+		if !smoothIncreases && float32(proposedReplicas) > y {
+			y = float32(proposedReplicas)
+			return proposedReplicas
+		}
+
+		x := float32(proposedReplicas)
+		y = exponentialSmootherGreed*x + (1-exponentialSmootherGreed)*y
+		return int(y)
+	}
+}
+
+func (a *autoScaler) step(id FunctionId) adjuster {
+	return func(proposedReplicas int) int {
+		if proposedReplicas == 0 {
+			return 0
+		}
+		return (1 + proposedReplicas/stepSize) * stepSize
+	}
 }
 
 func (a *autoScaler) limitScalingDown(fn FunctionId) adjuster {

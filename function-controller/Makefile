@@ -48,3 +48,4 @@ simulation:
 	go build pkg/controller/autoscaler/simulator/simulator.go
 	./simulator
 	gnuplot -c pkg/controller/autoscaler/simulator/simulator.plt > simulation-results.png
+	osascript refresh-preview.scpt
