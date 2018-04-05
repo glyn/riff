@@ -65,6 +65,22 @@ type FunctionId struct {
 const MaxUint = ^uint(0)
 const MaxInt = int(MaxUint >> 1)
 
+// PID controller coefficients
+const (
+	innerKp = 0.05
+	innerKi = 0
+	innerKd = 0
+	outerKp = 1
+	outerKi = 0 // 0.001
+	outerKd = 0 // 0.5
+)
+
+type queueLength int64
+type queueRateOfChange int64
+
+const innerInitialSetpoint = queueRateOfChange(0) // somewhat arbitrary value
+const outerSetpoint = queueLength(5)
+
 // NewAutoScaler constructs an autoscaler instance using the given metrics receiver and the given transport inspector.
 func NewAutoScaler(metricsReceiver metrics.MetricsReceiver, transportInspector transport.Inspector) *autoScaler {
 	return &autoScaler{
@@ -152,8 +168,8 @@ func (a *autoScaler) emptyQueue(funcId FunctionId) (bool, int64) {
 	return true, 0
 }
 
-func (a *autoScaler) queueLength(funcId FunctionId) int64 {
-	ql := int64(0)
+func (a *autoScaler) queueLength(funcId FunctionId) queueLength {
+	ql := queueLength(0)
 	for topic, funcTotals := range a.totals {
 		if _, ok := funcTotals[funcId]; ok {
 			queueLen, err := a.transportInspector.QueueLength(topic, funcId.Function)
@@ -161,7 +177,7 @@ func (a *autoScaler) queueLength(funcId FunctionId) int64 {
 				log.Printf("Failed to obtain queue length (and will assume it is positive): %v", err)
 				ql++
 			} else {
-				ql += queueLen
+				ql += queueLength(queueLen)
 			}
 		}
 	}
@@ -318,15 +334,40 @@ func (a *autoScaler) metricsScaler(fn FunctionId) scaler {
 }
 
 func (a *autoScaler) queueLengthScaling(fn FunctionId) adjuster {
-	return func(proposedReplicas int) int {
-		qLen := a.queueLength(fn)
+	//inner := newPidController(innerKp, innerKi, innerKd)
+	outer := newPidController(outerKp, outerKi, outerKd)
+	//innerSetpoint := innerInitialSetpoint
+	//queueLen := queueLength(0)
 
-		if qLen == 0 {
-			// Must not return 0 if the input is 1. See comment in metricsScaler.
-			return proposedReplicas
-		} else {
-			return int(qLen) // number of replicas proportional to qLen, factor=1 for now
+	return func(inputReplicas int) int {
+		queueLen := a.queueLength(fn)
+
+		// Use PID controller
+		//innerSetpoint = queueRateOfChange(outer.work(int64(queueLen - outerSetpoint)))
+		//
+		//rateOfChange := queueRateOfChange(mt.transmitCount - mt.receiveCount)
+		//deltaProposedReplicas := int(inner.work(int64(rateOfChange - innerSetpoint))) // let's hope this int64->int conversion doesn't truncate
+
+		// Experiment with single PID controller based on queue length
+
+		deltaProposedReplicas := int(outer.work(int64(queueLen - outerSetpoint)))
+
+		// Is the output a delta or an absolute value. Assume absolute for now...
+		//proposedReplicas := a.replicas[fn] - deltaProposedReplicas
+		proposedReplicas := deltaProposedReplicas
+
+		if proposedReplicas < 0 {
+			proposedReplicas = 0
 		}
+
+		// Must not return 0 if the input is 1. See comment in metricsScaler.
+		if proposedReplicas == 0 {
+			return inputReplicas
+		}
+
+		return proposedReplicas
+
+
 	}
 }
 
