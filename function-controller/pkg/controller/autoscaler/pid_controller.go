@@ -16,6 +16,8 @@
 
 package autoscaler
 
+import "math"
+
 const dt = 1 // sampling rate
 
 type pidController struct {
@@ -44,5 +46,6 @@ func (pid *pidController) work(e int64) int64 {
 
 	// The control value is sum of the proportional, integral, and derivative terms adjusted by the
 	// corresponding coefficients.
-	return int64(pid.kp*float64(e) + pid.ki*float64(pid.i) + pid.kd*float64(pid.d))
+	// Experiment with an error-square controller
+	return int64(math.Abs(float64(e))*(pid.kp*float64(e) + pid.ki*float64(pid.i) + pid.kd*float64(pid.d)))
 }

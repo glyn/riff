@@ -73,7 +73,7 @@ const (
 	innerKd              = 0
 
 	outerSetpoint     = queueLength(5)
-	k                 = 0.1
+	k                 = 0.0001
 	outerKp           = 0.5 * k  // 0.05 // 0.1 // 1
 	outerKi           = 0.05 * k // 0.0005
 	outerKd           = 0.05 * k // increasing this above 0 doesn't help the simulated workload because the replica initialisation delay tends to make the autoscaler too aggressive
