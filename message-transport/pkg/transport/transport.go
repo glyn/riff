@@ -14,12 +14,22 @@
  * limitations under the License.
  */
 
-// Package transport provides interfaces for sending and receiving messages.
+// Package transport provides interfaces implemented by concrete event brokers.
 package transport
 
 import (
 	"github.com/projectriff/riff/message-transport/pkg/message"
+	v1 "github.com/projectriff/riff/kubernetes-crds/pkg/apis/projectriff.io/v1alpha1"
 )
+
+//go:generate mockery -name=TopicFactory -output mocktransport -outpkg mocktransport
+
+// TopicFactory is an interface for creating topics.
+type TopicFactory interface {
+	// CreateTopic creates a topic with the given name and spec.
+	// If a topic with the given name already exists, no action is taken and the method returns normally.
+	CreateTopic(topic string, spec *v1.TopicSpec) error // TODO: might be better to abstract topic spec and avoid concrete dependency on CRD
+}
 
 //go:generate mockery -name=Producer -output mocktransport -outpkg mocktransport
 
