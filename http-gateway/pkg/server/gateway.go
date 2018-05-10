@@ -55,7 +55,7 @@ func (g *gateway) Run(stop <-chan struct{}) {
 
 func (g *gateway) consumeRepliesLoop() {
 	for {
-		msg, _, err := g.consumer.Receive()
+		msg, _, _, err := g.consumer.Receive()
 		if err != nil {
 			break
 		}

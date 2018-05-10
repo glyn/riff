@@ -28,7 +28,7 @@ func Run(consumer transport.Consumer, producer transport.Producer, dispatcher di
 	go func() {
 		for {
 			// Incoming message
-			msg, _, err := consumer.Receive()
+			msg, _, _, err := consumer.Receive()
 			if err == nil {
 				dispatcher.Input() <- msg
 			} else {

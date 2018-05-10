@@ -85,7 +85,7 @@ var _ = Describe("Kafka Metrics Integration", func() {
 		err := producer.Send(testTopic, testMessage)
 		Expect(err).NotTo(HaveOccurred())
 
-		msg, topic, err := consumer.Receive()
+		msg, topic, _, err := consumer.Receive()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(msg).To(Equal(testMessage))
 		Expect(topic).To(Equal(testTopic))

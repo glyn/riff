@@ -30,7 +30,7 @@ func NewReceiver(consumer transport.Consumer) (*metricsReceiver) {
 
 	go func() {
 		for {
-			msg, _, err := consumer.Receive()
+			msg, _, _, err := consumer.Receive()
 			if err != nil {
 				close(consumerMetricsChan)
 				close(producerMetricsChan)

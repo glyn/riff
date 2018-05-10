@@ -33,14 +33,19 @@ type Producer interface {
 	Errors() <-chan error
 }
 
+type Metadata struct {
+	SequenceId interface {} // comparable and hashable identifier of an ordered sequence (e.g. kafka partition) of messages
+}
+
+
 //go:generate mockery -name=Consumer -output mocktransport -outpkg mocktransport
 
-// Consumer is an interface for receiving messages, along with their topics, from a fixed, implementation-defined set
-// of topics.
+// Consumer is an interface for receiving messages, along with their topics, and metadata from a fixed,
+// implementation-defined set of topics.
 // If io.Closer is implemented it will be called when the Consumer is no longer needed.
 type Consumer interface {
-	// Receive returns a message along with the topic from which the message was received.
-	Receive() (message.Message, string, error)
+	// Receive returns a message along with the topic from which the message was received plus some metadata.
+	Receive() (message.Message, string, *Metadata, error)
 }
 
 //go:generate mockery -name=Inspector -output mocktransport -outpkg mocktransport

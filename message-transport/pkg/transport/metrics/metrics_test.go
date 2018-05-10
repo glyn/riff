@@ -244,7 +244,7 @@ var _ bool = Describe("Metrics", func() {
 
 		Describe("Receive", func() {
 			JustBeforeEach(func() {
-				receivedMsg, receivedTopic, receivedErr = consumer.Receive()
+				receivedMsg, receivedTopic, _, receivedErr = consumer.Receive()
 			})
 
 			Context("when the delegate returns a message", func() {

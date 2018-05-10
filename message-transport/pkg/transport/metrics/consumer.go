@@ -74,7 +74,7 @@ type consumer struct {
 
 func (c *consumer) Receive() (message.Message, string, error) {
 	// TODO: emit "ready to receive" metric consumer group/consumer/timestamp
-	m, t, err := c.delegate.Receive()
+	m, t, _, err := c.delegate.Receive()
 	if err != nil {
 		return nil, "", err
 	}

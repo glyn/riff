@@ -21,6 +21,7 @@ import (
 	"log"
 	"github.com/projectriff/riff/message-transport/pkg/message"
 	"errors"
+	"github.com/projectriff/riff/message-transport/pkg/transport"
 )
 
 func NewConsumer(addrs []string, groupID string, topics []string, consumerConfig *cluster.Config) (*consumer, error) {
@@ -48,7 +49,7 @@ func NewConsumer(addrs []string, groupID string, topics []string, consumerConfig
 					log.Println("Failed to extract message ", err)
 					continue
 				}
-				sendMessageFromTopic(messages, msg, kafkaMsg.Topic)
+				sendMessageFromTopic(messages, msg, kafkaMsg.Topic, kafkaMsg.Partition)
 				clusterConsumer.MarkOffset(kafkaMsg, "") // mark message as processed
 			}
 		}
@@ -60,16 +61,20 @@ func NewConsumer(addrs []string, groupID string, topics []string, consumerConfig
 	}, nil
 }
 
-func sendMessageFromTopic(messages chan<- messageFromTopic, messageWithHeaders message.Message, topic string) {
+func sendMessageFromTopic(messages chan<- messageFromTopic, messageWithHeaders message.Message, topic string, partition int32) {
 	messages <- messageFromTopic{
 		Message: messageWithHeaders,
 		topic:   topic,
+		metadata: &transport.Metadata{
+			SequenceId: partition,
+		},
 	}
 }
 
 type messageFromTopic struct {
 	message.Message
 	topic string
+	metadata *transport.Metadata
 }
 
 type consumer struct {
@@ -77,12 +82,12 @@ type consumer struct {
 	messages        <-chan messageFromTopic
 }
 
-func (c *consumer) Receive() (message.Message, string, error) {
+func (c *consumer) Receive() (message.Message, string, *transport.Metadata, error) {
 	mt, ok := <-c.messages
 	if !ok {
-		return nil, "", errors.New("no message available")
+		return nil, "", nil, errors.New("no message available")
 	}
-	return mt.Message, mt.topic, nil
+	return mt.Message, mt.topic, mt.metadata, nil
 }
 
 func (c *consumer) Close() error {
