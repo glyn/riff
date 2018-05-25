@@ -71,6 +71,11 @@ func (d *deployer) Deploy(link *v1.Link, function *v1.Function) error {
 	if err != nil {
 		return err
 	}
+	service := d.buildService(link, function)
+	_, err = d.clientset.CoreV1().Services(link.Namespace).Create(&service)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -141,6 +146,22 @@ func (d *deployer) buildSidecarContainer(link *v1.Link, protocol string) corev1.
 	ws, _ := json.Marshal(link.Spec.Windowing)
 	c.Env = []corev1.EnvVar{corev1.EnvVar{Name: "WINDOWING_STRATEGY", Value: string(ws)}}
 	return c
+}
+
+func (d *deployer) buildService(link *v1.Link, function *v1.Function) corev1.Service {
+	panic("not implemented")
+	return corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      link.Name,
+			Namespace: link.Namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				*metav1.NewControllerRef(link, v1.SchemeGroupVersion.WithKind("Link")), // TODO: should this be Function?
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			// TODO
+		},
+	}
 }
 
 func (d *deployer) Undeploy(link *v1.Link) error {
