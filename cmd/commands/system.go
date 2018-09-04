@@ -42,6 +42,10 @@ If an 'istio-system' namespace isn't found, it will be created and Istio compone
 
 Use the '--node-port' flag when installing on Minikube and other clusters that don't support an external load balancer.
 
+use the '--from' flag to specify the path of a directory containing files to be installed. The directory must contain a
+manifest named 'manifest.yaml' and may contain other files including YAML definitions of components to be installed and
+an image manifest named 'image-manifest.yaml'. Any image manifest is ignored unless '--registry' is also specified.
+
 Use the '--manifest' flag to specify the path of a manifest file which provides the URLs of the YAML definitions of the
 components to be installed. The manifest file contents should be of the following form:
 
@@ -59,6 +63,9 @@ namespace:
 `,
 		Example: `  riff system install`,
 		PreRunE: func(cmd *cobra.Command, args []string) error {
+			if err := FlagsDependency(Set("from"), NoneOf("manifest"))(cmd); err != nil {
+				return err
+			}
 			// TODO: implement support for global flags - for now don't allow their use
 			if cmd.Flags().Changed("kubeconfig") {
 				return errors.New("The 'kubeconfig' flag is not yet supported by the 'system install' command")
@@ -87,6 +94,7 @@ namespace:
 	command.Flags().StringVarP(&options.Manifest, "manifest", "m", "stable", "manifest of YAML files to be applied; can be a named manifest (stable or latest) or a file path of a manifest file")
 	command.Flags().BoolVarP(&options.NodePort, "node-port", "", false, "whether to use NodePort instead of LoadBalancer for ingress gateways")
 	command.Flags().BoolVarP(&options.Force, "force", "", false, "force the install of components without getting any prompts")
+	command.Flags().StringVarP(&options.From, "from", "", "./", "directory containing files to be installed")
 
 	return command
 }

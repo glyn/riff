@@ -37,6 +37,7 @@ type SystemInstallOptions struct {
 	Manifest string
 	NodePort bool
 	Force    bool
+	From     string
 }
 
 type SystemUninstallOptions struct {
