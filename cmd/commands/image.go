@@ -134,7 +134,7 @@ func ImagePush(c *core.ImageClient) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "push",
 		Short: "Push (relocated) docker image names to an image registry",
-		Long: "Push the set of images identified by the provided image manifest into a remote registry, for later consumption by `riff system install`.\n\n" +
+		Long: "Load, tag, and push the set of images identified by the provided image manifest into a remote registry, for later consumption by `riff system install`.\n\n" +
 			"NOTE: This command requires the `docker` command line tool, as well as a (local) docker daemon and will load and tag the images using that daemon.",
 		Example: `  riff image push --images=riff-distro-xx/image-manifest.yaml`,
 		PreRunE: func(cmd *cobra.Command, args []string) error {
@@ -162,6 +162,8 @@ func ImagePush(c *core.ImageClient) *cobra.Command {
 	command.Flags().StringVarP(&options.Images, "images", "i", "", "path of an image manifest of image names to be pushed")
 	command.MarkFlagRequired("images")
 	command.MarkFlagFilename("images", "yml", "yaml")
+	command.Flags().BoolVarP(&options.LoadAndTag, "load", "l", true, "whether to load and tag the images")
+	command.Flags().BoolVarP(&options.Push, "push", "p", true, "whether to push the images")
 
 	return command
 }

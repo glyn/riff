@@ -31,7 +31,9 @@ type ImageClient interface {
 }
 
 type PushImagesOptions struct {
-	Images string
+	Images     string
+	LoadAndTag bool
+	Push       bool
 }
 
 type PullImagesOptions struct {
@@ -53,7 +55,7 @@ func (c *imageClient) PushImages(options PushImagesOptions) error {
 	distroLocation := filepath.Dir(options.Images)
 	for name, sha := range imManifest.Images {
 		filename := fmt.Sprintf("%s/images/%s", distroLocation, sha)
-		if err := c.docker.PushImage(string(name), string(sha), filename); err != nil {
+		if err := c.docker.PushImage(string(name), string(sha), filename, options.LoadAndTag, options.Push); err != nil {
 			return err
 		}
 	}

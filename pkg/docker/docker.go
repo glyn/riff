@@ -29,7 +29,7 @@ import (
 )
 
 type Docker interface {
-	PushImage(name string, digest string, file string) error
+	PushImage(name string, digest string, file string, loadAndTag bool, push bool) error
 	PullImage(name string, directory string) (digest string, err error)
 }
 
@@ -41,14 +41,21 @@ type processDocker struct {
 	stderr io.Writer
 }
 
-func (pd *processDocker) PushImage(name string, digest string, file string) error {
-	if err := pd.exec(5*time.Minute, "image", "load", "-i", file); err != nil {
-		return err
+func (pd *processDocker) PushImage(name string, digest string, file string, loadAndTag bool, push bool) error {
+	if loadAndTag {
+		if err := pd.exec(5*time.Minute, "image", "load", "-i", file); err != nil {
+			return err
+		}
+		if err := pd.exec(1*time.Second, "image", "tag", digest, name); err != nil {
+			return err
+		}
 	}
-	if err := pd.exec(1*time.Second, "image", "tag", digest, name); err != nil {
-		return err
+	if push {
+		if err := pd.exec(10*time.Minute, "push", name); err != nil {
+			return err
+		}
 	}
-	return pd.exec(10*time.Minute, "push", name)
+	return nil
 }
 
 func (pd *processDocker) PullImage(name string, directory string) (digest string, err error) {
