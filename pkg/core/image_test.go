@@ -32,6 +32,7 @@ var _ = Describe("RelocateImages", func() {
 		client = NewImageClient(nil, mockFutils, mockChecker, resource.ListImages, ioutil.Discard)
 		options.Registry = "reg.org"
 		options.RegistryUser = "user"
+		options.HierachicalNames = true
 		testErr = errors.New("test error")
 	})
 

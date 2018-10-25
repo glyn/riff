@@ -45,10 +45,10 @@ type RelocateImagesOptions struct {
 	Manifest   string
 	Output     string
 
-	Registry     string
-	RegistryUser string
-	Images       string
-	Flatten      bool
+	Registry         string
+	RegistryUser     string
+	Images           string
+	HierachicalNames bool // See https://github.com/projectriff/riff/issues/903
 }
 
 type DownloadSystemOptions struct {
@@ -80,7 +80,7 @@ func createImageMapper(options RelocateImagesOptions) (*imageMapper, error) {
 		return nil, err
 	}
 
-	imageMapper, err := newImageMapper(options.Registry, options.RegistryUser, keys(imageManifest.Images), options.Flatten)
+	imageMapper, err := newImageMapper(options.Registry, options.RegistryUser, keys(imageManifest.Images), options.HierachicalNames)
 	if err != nil {
 		return nil, err
 	}

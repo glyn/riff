@@ -17,8 +17,6 @@
 package core
 
 import (
-	"crypto/md5"
-	"encoding/hex"
 	"fmt"
 	"path"
 	"strings"
@@ -33,7 +31,7 @@ type imageMapper struct {
 	replacer *strings.Replacer
 }
 
-func newImageMapper(mappedHost string, mappedUser string, images []image.Name, flatten bool) (*imageMapper, error) {
+func newImageMapper(mappedHost string, mappedUser string, images []image.Name, hierarchicalNames bool) (*imageMapper, error) {
 	if err := containsAny(mappedHost, "/", `"`, " "); err != nil {
 		return nil, fmt.Errorf("invalid registry hostname: %v", err)
 	}
@@ -42,10 +40,10 @@ func newImageMapper(mappedHost string, mappedUser string, images []image.Name, f
 	}
 
 	var pathMapping pathMapping
-	if flatten {
-		pathMapping = flattenRepoPath
-	} else {
+	if hierarchicalNames {
 		pathMapping = sanitiseRepoPath
+	} else {
+		pathMapping = flattenRepoPath
 	}
 
 	mapImg := mapImage(pathMapping)
@@ -72,8 +70,6 @@ func newIdentityImageMapper() *imageMapper {
 	}
 }
 
-type pathMapping func(string, string, image.Name) string
-
 func mapImage(pathMapping pathMapping) func(mappedHost string, mappedUser string, imgRepoPath string, originalImage image.Name) string {
 	return func(mappedHost string, mappedUser string, imgRepoPath string, originalImage image.Name) string {
 		// ensure local-only images are tagged (with something other than latest) to prevent docker
@@ -84,48 +80,6 @@ func mapImage(pathMapping pathMapping) func(mappedHost string, mappedUser string
 		}
 		return path.Join(mappedHost, mappedPath)
 	}
-}
-
-func sanitiseRepoPath(repoPath string, user string, originalImage image.Name) string {
-	repoPathElements := strings.SplitN(repoPath, "/", 2)
-	var mapped string
-	switch len(repoPathElements) {
-	case 1:
-		// prevent collisions
-		return flattenRepoPath(repoPath, user, originalImage)
-	default:
-		mapped = path.Join(user, repoPathElements[1])
-		if tag := originalImage.Tag(); tag != "" {
-			mapped += ":" + tag
-		}
-		if digest := originalImage.Digest(); digest != image.EmptyDigest {
-			mapped += "@" + digest.String()
-		}
-	}
-	// Replace "@sha256:" since digests are not allowed as part of a docker tag
-	return strings.Replace(mapped, "@sha256:", "-", 1)
-}
-
-func flattenRepoPath(repoPath string, user string, originalImage image.Name) string {
-	hasher := md5.New()
-	hasher.Write([]byte(originalImage.String()))
-	return fmt.Sprintf("%s/%s-%s", user, imageBaseName(repoPath), hex.EncodeToString(hasher.Sum(nil)))
-}
-
-func imageBaseName(repoPath string) string {
-	var base string
-	digestPathComponents := strings.SplitN(repoPath, "@sha256:", 2)
-	if len(digestPathComponents) == 2 {
-		base = path.Base(digestPathComponents[0])
-	} else {
-		taggedPathComponents := strings.SplitN(repoPath, ":", 2)
-		if len(taggedPathComponents) == 2 {
-			base = path.Base(taggedPathComponents[0])
-		} else {
-			base = path.Base(repoPath)
-		}
-	}
-	return base
 }
 
 func containsAny(s string, items ...string) error {

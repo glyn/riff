@@ -43,24 +43,24 @@ image: ` + flattenedMappedImage + `
 `
 	)
 	var (
-		registry string
-		user     string
-		images   []image.Name
-		flatten  bool
-		mapper   *imageMapper
-		err      error
-		input    []byte
-		output   []byte
+		registry          string
+		user              string
+		images            []image.Name
+		hierarchicalNames bool
+		mapper            *imageMapper
+		err               error
+		input             []byte
+		output            []byte
 	)
 
 	BeforeEach(func() {
 		registry = testRegistry
 		user = testUser
-		flatten = false
+		hierarchicalNames = true
 	})
 
 	JustBeforeEach(func() {
-		mapper, err = newImageMapper(registry, user, images, flatten)
+		mapper, err = newImageMapper(registry, user, images, hierarchicalNames)
 	})
 
 	Describe("newImageMapper", func() {
@@ -181,9 +181,9 @@ image: ` + mappedImage + `
 				})
 			})
 
-			Context("when flattening is specified", func() {
+			Context("when flattening is required", func() {
 				BeforeEach(func() {
-					flatten = true
+					hierarchicalNames = false
 				})
 
 				It("should perform the mappings using flattened image names", func() {
