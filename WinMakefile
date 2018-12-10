@@ -1,0 +1,71 @@
+.PHONY: build clean test all release gen-mocks check-mockery verify-docs clean-docs
+
+OUTPUT = riff
+VERSION = $(shell type VERSION)
+GITSHA = $(shell git rev-parse HEAD)
+GITDIRTY = $(shell git diff --quiet HEAD || echo dirty)
+LDFLAGS_VERSION = -X github.com/projectriff/riff/pkg/env.cli_name=riff \
+                  -X github.com/projectriff/riff/pkg/env.cli_version=$(VERSION) \
+				  -X github.com/projectriff/riff/pkg/env.cli_gitsha=$(GITSHA) \
+				  -X github.com/projectriff/riff/pkg/env.cli_gitdirty=$(GITDIRTY)
+GOBIN = $(shell go env GOPATH)\bin
+
+all: build test docs
+
+build: $(OUTPUT)
+
+test:
+	go test ./...
+
+check-mockery:
+	where mockery > NUL || (echo mockery not found: issue "go get -u github.com/vektra/mockery/.../" && false)
+
+gen-mocks: check-mockery
+	mockery -output pkg/core/mocks/mockbuilder			-outpkg mockbuilder			-dir pkg/core 																					-name Builder
+	mockery -output pkg/core/mocks						-outpkg mocks 				-dir pkg/core 																					-name Client
+	mockery -output pkg/core/vendor_mocks				-outpkg vendor_mocks 		-dir vendor/k8s.io/client-go/kubernetes 														-name Interface
+	mockery -output pkg/core/vendor_mocks/mockserving	-outpkg mockserving 		-dir vendor/github.com/knative/serving/pkg/client/clientset/versioned							-name Interface
+	mockery -output pkg/core/vendor_mocks/mockserving	-outpkg mockserving 		-dir vendor/github.com/knative/serving/pkg/client/clientset/versioned/typed/serving/v1alpha1	-name ServingV1alpha1Interface
+	mockery -output pkg/core/vendor_mocks/mockserving	-outpkg mockserving 		-dir vendor/github.com/knative/serving/pkg/client/clientset/versioned/typed/serving/v1alpha1	-name ServiceInterface
+	mockery -output pkg/core/vendor_mocks				-outpkg vendor_mocks	 	-dir vendor/k8s.io/client-go/kubernetes/typed/core/v1 											-name CoreV1Interface
+	mockery -output pkg/core/vendor_mocks				-outpkg vendor_mocks 		-dir vendor/k8s.io/client-go/kubernetes/typed/core/v1 											-name NamespaceInterface
+	mockery -output pkg/core/vendor_mocks				-outpkg vendor_mocks	 	-dir vendor/k8s.io/client-go/kubernetes/typed/core/v1 											-name ServiceAccountInterface
+	mockery -output pkg/core/vendor_mocks				-outpkg vendor_mocks 		-dir vendor/k8s.io/client-go/kubernetes/typed/core/v1 											-name SecretInterface
+	mockery -output pkg/core/vendor_mocks				-outpkg vendor_mocks	 	-dir vendor/k8s.io/client-go/tools/clientcmd     	   											-name ClientConfig
+	mockery -output pkg/fileutils/mocks					-outpkg mocks           	-dir pkg/fileutils                                    											-name Checker
+	mockery -output pkg/fileutils/mocks					-outpkg mocks				-dir pkg/fileutils																				-name Copier
+
+install: build
+	copy $(OUTPUT).exe $(GOBIN)
+
+$(OUTPUT): vendor VERSION
+	go build -o $(OUTPUT).exe -ldflags "$(LDFLAGS_VERSION)"
+
+release: vendor VERSION
+	cmd /C "set GOOS=windows&&set GOARCH=amd64&& go build -ldflags "$(LDFLAGS_VERSION)" -o $(OUTPUT).exe && 7z a -tzip riff-windows-amd64.zip $(OUTPUT).exe && del /q $(OUTPUT).exe"
+	cmd /C "set GOOS=darwin&&set GOARCH=amd64&& go build -ldflags "$(LDFLAGS_VERSION)" -o $(OUTPUT) && 7z a -ttar riff-darwin-amd64.tar $(OUTPUT) && 7z a -tzip riff-darwin-amd64.tgz riff-darwin-amd64.tar && del /q riff-darwin-amd64.tar && del /q $(OUTPUT)"
+	cmd /C "set GOOS=linux&&set GOARCH=amd64&& go build -ldflags "$(LDFLAGS_VERSION)" -o $(OUTPUT) && 7z a -ttar riff-linux-amd64.tar $(OUTPUT) && 7z a -tzip riff-linux-amd64.tgz riff-linux-amd64.tar && del /q riff-linux-amd64.tar && del /q $(OUTPUT)"
+
+docs: $(OUTPUT) clean-docs
+	git config --local core.autocrlf false && $(OUTPUT) docs
+
+verify-docs: docs
+	git diff --exit-code docs
+
+clean-docs:
+	if exist docs rmdir /s /q docs
+
+clean: 
+	if exist $(OUTPUT).exe del /f /q $(OUTPUT).exe
+	if exist $(OUTPUT) del /f /q $(OUTPUT)
+	if exist riff-darwin-amd64.tgz del /f /q riff-darwin-amd64.tgz
+	if exist riff-linux-amd64.tgz del /f /q riff-linux-amd64.tgz
+	if exist riff-windows-amd64.zip del /f /q riff-windows-amd64.zip 
+
+vendor: Gopkg.lock
+	# GCH TODO this hacky attempt at a touch does not update the timestamp on the vendor folder. Improve it.
+	dep ensure -vendor-only && copy /y nul vendor
+
+Gopkg.lock: Gopkg.toml
+	dep ensure -no-vendor && copy /y nul Gopkg.lock
+
