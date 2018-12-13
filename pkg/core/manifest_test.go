@@ -17,11 +17,13 @@
 package core_test
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
+
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	"github.com/projectriff/riff/pkg/core"
-	"path/filepath"
-	"runtime"
 )
 
 var _ = Describe("Manifest", func() {
@@ -123,24 +125,50 @@ var _ = Describe("Manifest", func() {
 		})
 
 		Context("when the manifest is valid", func() {
-			BeforeEach(func() {
-				manifestPath = "./fixtures/manifest/valid.yaml"
+			Context("when the manifest path is relative", func() {
+				BeforeEach(func() {
+					manifestPath = "./fixtures/manifest/valid.yaml"
+				})
+
+				It("should return with no error", func() {
+					Expect(err).NotTo(HaveOccurred())
+				})
+
+				It("should parse the istio array", func() {
+					Expect(manifest.Istio).To(ConsistOf("istio-crds", "http://istio-release"))
+				})
+
+				It("should parse the Knative array", func() {
+					Expect(manifest.Knative).To(ConsistOf("build-release", "https://serving-release", "eventing-release"))
+				})
+
+				It("should parse the Knative array", func() {
+					Expect(manifest.Namespace).To(ConsistOf("buildtemplate-release"))
+				})
 			})
 
-			It("should return with no error", func() {
-				Expect(err).NotTo(HaveOccurred())
-			})
+			Context("when the manifest path is absolute", func() {
+				BeforeEach(func() {
+					wd, err := os.Getwd()
+					Expect(err).NotTo(HaveOccurred())
+					manifestPath = filepath.Join(wd, "fixtures", "manifest", "valid.yaml")
+				})
 
-			It("should parse the istio array", func() {
-				Expect(manifest.Istio).To(ConsistOf("istio-crds", "http://istio-release"))
-			})
+				It("should return with no error", func() {
+					Expect(err).NotTo(HaveOccurred())
+				})
 
-			It("should parse the Knative array", func() {
-				Expect(manifest.Knative).To(ConsistOf("build-release", "https://serving-release", "eventing-release"))
-			})
+				It("should parse the istio array", func() {
+					Expect(manifest.Istio).To(ConsistOf("istio-crds", "http://istio-release"))
+				})
 
-			It("should parse the Knative array", func() {
-				Expect(manifest.Namespace).To(ConsistOf("buildtemplate-release"))
+				It("should parse the Knative array", func() {
+					Expect(manifest.Knative).To(ConsistOf("build-release", "https://serving-release", "eventing-release"))
+				})
+
+				It("should parse the Knative array", func() {
+					Expect(manifest.Namespace).To(ConsistOf("buildtemplate-release"))
+				})
 			})
 		})
 	})
