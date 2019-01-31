@@ -17,12 +17,14 @@
 package commands
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
-	v1 "k8s.io/api/core/v1"
+	"k8s.io/api/core/v1"
 
 	"github.com/frioux/shellquote"
 	servingv1alpha1 "github.com/knative/serving/pkg/apis/serving/v1alpha1"
@@ -281,9 +283,19 @@ Additional curl arguments and flags may be specified after a double dash (--).`,
 				curlCmd.Args = append(curlCmd.Args, "-H", "Content-Type: text/plain")
 			}
 
+			verbose := false
+
 			if argsLengthAtDash > 0 {
-				curlCmd.Args = append(curlCmd.Args, args[argsLengthAtDash:]...)
+				curlArgs := args[argsLengthAtDash:]
+				for _, a := range curlArgs {
+					if verboseCurl(a) {
+						verbose = true
+					}
+				}
+				curlCmd.Args = append(curlCmd.Args, curlArgs...)
 			}
+
+			fmt.Printf("verbose=%v\n", verbose)
 
 			quoted, err := shellquote.Quote(curlCmd.Args)
 			if err != nil {
@@ -291,7 +303,18 @@ Additional curl arguments and flags may be specified after a double dash (--).`,
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), quoted)
 
-			return curlCmd.Run()
+			if verbose {
+				return curlCmd.Run()
+			}
+
+			// curl is not verbose, so make it verbose, capture standard error, and output HTTP status if not 200
+			curlCmd.Args = append(curlCmd.Args, "-v")
+			buffer := new(bytes.Buffer)
+			errStream := curlCmd.Stderr // output errors to this
+			curlCmd.Stderr = buffer
+			err = curlCmd.Run()
+			// TODO: check for HTTP error in buffer and send any such to errStream
+			return err
 		},
 	}
 
@@ -302,6 +325,12 @@ Additional curl arguments and flags may be specified after a double dash (--).`,
 	command.Flags().BoolVar(&serviceInvokeOptions.ContentTypeText, "text", false, "set the request's content type to 'text/plain'")
 
 	return command
+}
+
+func verboseCurl(curlArg string) bool {
+	return curlArg == "-v" || curlArg == "--verbose" ||
+		// short flags can be used next to each other, e.g. -Lv
+		(strings.HasPrefix(curlArg, "-") && !strings.HasPrefix(curlArg, "--") && strings.Contains(curlArg, "v"))
 }
 
 func ServiceDelete(fcClient *core.Client) *cobra.Command {
