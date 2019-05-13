@@ -24,6 +24,7 @@ var (
 	ValidListOptions = cli.ListOptions{
 		Namespace: "default",
 	}
+
 	InvalidListOptions           = cli.ListOptions{}
 	InvalidListOptionsFieldError = cli.ErrMissingOneOf("namespace", "all-namespaces")
 )
@@ -33,6 +34,7 @@ var (
 		Namespace: "default",
 		Name:      "push-credentials",
 	}
+
 	InvalidResourceOptions           = cli.ResourceOptions{}
 	InvalidResourceOptionsFieldError = (&cli.FieldError{}).Also(
 		cli.ErrMissingField("namespace"),
@@ -45,8 +47,16 @@ var (
 		Namespace: "default",
 		Names:     []string{"my-resource"},
 	}
-	InvalidDeleteOptions = cli.DeleteOptions{
+
+	InvalidDeleteOptionsMissing = cli.DeleteOptions{
 		Namespace: "default",
 	}
-	InvalidDeleteOptionsFieldError = cli.ErrMissingOneOf("all", "names")
+	InvalidDeleteOptionsFieldMissingError = cli.ErrMissingOneOf("all", "names")
+
+	InvalidDeleteOptionsExcess = cli.DeleteOptions{
+		Namespace: "default",
+		Names:     []string{"my-resource"},
+		All:       true,
+	}
+	InvalidDeleteOptionsFieldExtraError = cli.ErrMultipleOneOf("all", "names")
 )

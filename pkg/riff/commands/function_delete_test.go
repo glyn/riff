@@ -27,11 +27,18 @@ import (
 func TestFunctionDeleteOptions(t *testing.T) {
 	table := testing.OptionsTable{
 		{
-			Name: "invalid delete",
+			Name: "invalid delete, missing",
 			Options: &commands.FunctionDeleteOptions{
-				DeleteOptions: testing.InvalidDeleteOptions,
+				DeleteOptions: testing.InvalidDeleteOptionsMissing,
 			},
-			ExpectFieldError: testing.InvalidDeleteOptionsFieldError,
+			ExpectFieldError: testing.InvalidDeleteOptionsFieldMissingError,
+		},
+		{
+			Name: "invalid delete, excessive",
+			Options: &commands.FunctionDeleteOptions{
+				DeleteOptions: testing.InvalidDeleteOptionsExcess,
+			},
+			ExpectFieldError: testing.InvalidDeleteOptionsFieldExtraError,
 		},
 		{
 			Name: "valid delete",

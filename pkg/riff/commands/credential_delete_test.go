@@ -34,11 +34,18 @@ func TestCredentialDeleteOptions(t *testing.T) {
 			ShouldValidate: true,
 		},
 		{
-			Name: "invalid multi-delete",
+			Name: "invalid multi-delete, excessive",
 			Options: &commands.CredentialDeleteOptions{
-				DeleteOptions: testing.InvalidDeleteOptions,
+				DeleteOptions: testing.InvalidDeleteOptionsExcess,
 			},
-			ExpectFieldError: testing.InvalidDeleteOptionsFieldError,
+			ExpectFieldError: testing.InvalidDeleteOptionsFieldExtraError,
+		},
+		{
+			Name: "invalid multi-delete, missing",
+			Options: &commands.CredentialDeleteOptions{
+				DeleteOptions: testing.InvalidDeleteOptionsMissing,
+			},
+			ExpectFieldError: testing.InvalidDeleteOptionsFieldMissingError,
 		},
 	}
 

@@ -27,11 +27,18 @@ import (
 func TestRequestProcessorDeleteOptions(t *testing.T) {
 	table := testing.OptionsTable{
 		{
-			Name: "invalid delete",
+			Name: "invalid delete, missing",
 			Options: &commands.RequestProcessorDeleteOptions{
-				DeleteOptions: testing.InvalidDeleteOptions,
+				DeleteOptions: testing.InvalidDeleteOptionsMissing,
 			},
-			ExpectFieldError: testing.InvalidDeleteOptionsFieldError,
+			ExpectFieldError: testing.InvalidDeleteOptionsFieldMissingError,
+		},
+		{
+			Name: "invalid delete, excessive",
+			Options: &commands.RequestProcessorDeleteOptions{
+				DeleteOptions: testing.InvalidDeleteOptionsExcess,
+			},
+			ExpectFieldError: testing.InvalidDeleteOptionsFieldExtraError,
 		},
 		{
 			Name: "valid delete",
