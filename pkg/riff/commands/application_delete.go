@@ -25,12 +25,15 @@ import (
 )
 
 type ApplicationDeleteOptions struct {
-	Namespace string
+	cli.DeleteOptions
 }
 
 func (opts *ApplicationDeleteOptions) Validate(ctx context.Context) *cli.FieldError {
-	// TODO implement
-	return nil
+	errs := &cli.FieldError{}
+
+	errs = errs.Also(opts.DeleteOptions.Validate(ctx))
+
+	return errs
 }
 
 func NewApplicationDeleteCommand(c *cli.Config) *cobra.Command {
